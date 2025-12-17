@@ -6,7 +6,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
-public class SimpleGameServer {
+public class ServerApp {
 
     // ================= 配置与常量 =================
     private static final int PORT = 8888;
