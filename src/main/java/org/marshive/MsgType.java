@@ -1,11 +1,14 @@
 package org.marshive;
 
+import lombok.Getter;
+
 import java.util.HashMap;
 import java.util.Map;
 
 /**
  * @author Qhbee
  */
+@Getter
 public enum MsgType {
     // 定义协议类型与对应的字节码
     CREATE((byte) 0x01),
@@ -17,11 +20,11 @@ public enum MsgType {
     private final byte code;
 
     // 缓存查找表，避免每次遍历，提高性能
-    private static final Map<Byte, MsgType> map = new HashMap<>();
+    private static final Map<Byte, MsgType> MAP = new HashMap<>();
 
     static {
         for (MsgType type : values()) {
-            map.put(type.code, type);
+            MAP.put(type.code, type);
         }
     }
 
@@ -29,12 +32,8 @@ public enum MsgType {
         this.code = code;
     }
 
-    public byte getCode() {
-        return code;
-    }
-
     // 静态方法：通过字节查找枚举
     public static MsgType fromByte(byte code) {
-        return map.get(code);
+        return MAP.get(code);
     }
 }
