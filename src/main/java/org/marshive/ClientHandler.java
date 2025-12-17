@@ -14,18 +14,14 @@ public class ClientHandler implements Runnable {
     private static final String MSG_ROOM_LIST    = "ROOM_LIST:";
 
     private final Socket socket;
-    private final RoomManager roomManager;
-    
     private InputStream in;
     private OutputStream out;
-    
-    private Room currentRoom; 
-    private boolean isHost = false; 
+    private Room currentRoom;
+    private boolean isHost = false;
     private volatile boolean running = true;
 
-    public ClientHandler(Socket socket, RoomManager roomManager) {
+    public ClientHandler(Socket socket) {
         this.socket = socket;
-        this.roomManager = roomManager;
     }
 
     @Override
@@ -66,6 +62,7 @@ public class ClientHandler implements Runnable {
 
     // 使用枚举进行 switch 处理
     private void handleCommand(MsgType type) throws IOException {
+        RoomManager roomManager = RoomManager.getInstance();
         switch (type) {
             case CREATE:
                 // 协议约定: [Len][NameString]
@@ -163,9 +160,8 @@ public class ClientHandler implements Runnable {
                     e.printStackTrace();
                 }
             }
-            
-            // 从管理器移除
-            roomManager.removeRoom(currentRoom.getId());
+            // 从管理器移除房间
+            RoomManager.getInstance().removeRoom(currentRoom.getId());
         }
     }
 }

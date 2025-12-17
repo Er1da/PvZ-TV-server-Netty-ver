@@ -5,6 +5,18 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 public class RoomManager {
+
+    // 1. 私有静态实例 (饿汉式单例，线程安全)
+    private static final RoomManager INSTANCE = new RoomManager();
+
+    // 2. 私有构造方法，防止外部 new
+    private RoomManager() {}
+
+    // 3. 公共静态访问点
+    public static RoomManager getInstance() {
+        return INSTANCE;
+    }
+
     // 线程安全的 Map 存储房间
     private final Map<String, Room> rooms = new ConcurrentHashMap<>();
 
