@@ -76,7 +76,7 @@ public class ClientHandler implements Runnable {
                 readFully(nameBytes);
                 String roomName = new String(nameBytes);
 
-                String newRoomId = UUID.randomUUID().toString().substring(0, 4);
+                String newRoomId = UUID.randomUUID().toString();
                 this.currentRoom = roomManager.createRoom(newRoomId, roomName, this);
                 this.isHost = true;
                 
