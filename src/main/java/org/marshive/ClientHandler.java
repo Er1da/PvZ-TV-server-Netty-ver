@@ -37,7 +37,9 @@ public class ClientHandler implements Runnable {
             // 循环读取指令，直到进入游戏状态
             while (running && (currentRoom == null || !currentRoom.isGaming())) {
                 int byteRead = in.read();
-                if (byteRead == -1) throw new EOFException("Client disconnected");
+                if (byteRead == -1) {
+                    throw new EOFException("Client disconnected");
+                }
 
                 // 将字节转换为枚举
                 MsgType type = MsgType.fromByte((byte) byteRead);
@@ -142,7 +144,9 @@ public class ClientHandler implements Runnable {
         int total = 0;
         while (total < buffer.length) {
             int count = in.read(buffer, total, buffer.length - total);
-            if (count == -1) throw new EOFException();
+            if (count == -1) {
+                throw new EOFException();
+            }
             total += count;
         }
     }
