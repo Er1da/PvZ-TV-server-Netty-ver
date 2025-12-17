@@ -22,6 +22,7 @@ public class ServerApp {
 
                 System.out.println("New Connection: " + clientSocket.getInetAddress());
 
+                // TODO: 线程池
                 // 为每个客户端启动一个独立线程连接连接
                 ClientHandler handler = new ClientHandler(clientSocket);
                 new Thread(handler).start();
