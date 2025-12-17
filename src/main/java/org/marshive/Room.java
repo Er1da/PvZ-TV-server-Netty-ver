@@ -1,5 +1,8 @@
 package org.marshive;
 
+/**
+ * @author Qhbee
+ */
 public class Room {
     private String id;
     private String name;

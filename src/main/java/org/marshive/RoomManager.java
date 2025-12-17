@@ -4,6 +4,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+/**
+ * @author Qhbee
+ */
 public class RoomManager {
 
     // 1. 私有静态实例 (饿汉式单例，线程安全)

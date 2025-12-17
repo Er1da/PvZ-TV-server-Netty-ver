@@ -3,6 +3,9 @@ package org.marshive;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * @author Qhbee
+ */
 public enum MsgType {
     // 定义协议类型与对应的字节码
     CREATE((byte) 0x01),

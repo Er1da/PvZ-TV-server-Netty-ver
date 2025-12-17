@@ -4,6 +4,9 @@ import java.io.*;
 import java.net.Socket;
 import java.util.UUID;
 
+/**
+ * @author Qhbee
+ */
 public class ClientHandler implements Runnable {
 
     // 简单的文本响应常量
