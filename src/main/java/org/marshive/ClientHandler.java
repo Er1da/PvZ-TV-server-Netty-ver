@@ -2,23 +2,21 @@ package org.marshive;
 
 import java.io.*;
 import java.net.Socket;
-import java.util.UUID;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
 
-/**
- * @author Qhbee
- */
 public class ClientHandler implements Runnable {
 
-    // 简单的文本响应常量
-    private static final String MSG_JOIN_SUCCESS = "JOIN_SUCCESS";
-    private static final String MSG_JOIN_FAIL    = "JOIN_FAIL";
-    private static final String MSG_GUEST_JOINED = "GUEST_JOINED";
-    private static final String MSG_ROOM_CREATED = "ROOM_CREATED:";
-    private static final String MSG_ROOM_LIST    = "ROOM_LIST:";
+    private static final byte ERR_BAD_REQ   = 1;
+    private static final byte ERR_NOT_FOUND = 2;
+    private static final byte ERR_FULL      = 3;
+    private static final byte ERR_NOT_HOST  = 4;
+    private static final byte ERR_NOT_READY = 5;
 
     private final Socket socket;
     private InputStream in;
     private OutputStream out;
+
     private Room currentRoom;
     private boolean isHost = false;
     private volatile boolean running = true;
@@ -30,144 +28,252 @@ public class ClientHandler implements Runnable {
     @Override
     public void run() {
         try {
-            in = socket.getInputStream();
-            out = socket.getOutputStream();
+            socket.setTcpNoDelay(true);
+            in = new BufferedInputStream(socket.getInputStream());
+            out = new BufferedOutputStream(socket.getOutputStream());
 
-            // === 阶段 1: 业务指令处理 (Create/Join/Query) ===
-            // 循环读取指令，直到进入游戏状态
-            while (running && (currentRoom == null || !currentRoom.isGaming())) {
-                int byteRead = in.read();
-                if (byteRead == -1) {
-                    throw new EOFException("Client disconnected");
+            // lobby 阶段：超时轮询，避免 guest 卡死无法切换 relay
+            socket.setSoTimeout(300);
+
+            while (running) {
+                if (currentRoom != null && currentRoom.isGaming() && currentRoom.isFull()) {
+                    break;
                 }
 
-                // 将字节转换为枚举
-                MsgType type = MsgType.fromByte((byte) byteRead);
+                int b;
+                try {
+                    b = in.read();
+                } catch (SocketTimeoutException ste) {
+                    continue;
+                }
+
+                if (b < 0) throw new EOFException("Client disconnected");
+                MsgType type = MsgType.fromByte((byte) b);
                 if (type == null) {
-                    System.out.println("Unknown msg type: " + byteRead);
-                    continue; // 忽略未知指令，或者选择断开
+                    sendError(ERR_BAD_REQ);
+                    continue;
                 }
 
                 handleCommand(type);
             }
 
-            // === 阶段 2: 游戏数据盲转发 ===
-            // 只有当房间标记为 isGaming=true 时，才会走到这里
-            if (currentRoom != null && currentRoom.isGaming()) {
-                System.out.println(">>> Transmit Mode Started for: " + socket.getInetAddress());
-                forwardLoop(); 
+            if (currentRoom != null && currentRoom.isGaming() && currentRoom.isFull()) {
+                socket.setSoTimeout(0);
+                Proto.sendFrame(out, RespType.RELAY_BEGIN.code, null);
+                forwardLoop();
             }
 
         } catch (IOException e) {
-            System.out.println("Connection Closed: " + e.getMessage());
+            System.out.println("Connection closed: " + e.getMessage());
         } finally {
-            cleanup();
+            cleanupOnDisconnect();
         }
     }
 
-    // 使用枚举进行 switch 处理
     private void handleCommand(MsgType type) throws IOException {
-        RoomManager roomManager = RoomManager.getInstance();
+        RoomManager rm = RoomManager.getInstance();
+
         switch (type) {
-            case CREATE:
-                // 协议约定: [Len][NameString]
-                int nameLen = in.read();
-                byte[] nameBytes = new byte[nameLen];
-                readFully(nameBytes);
-                String roomName = new String(nameBytes);
+            case CREATE: {
+                int nameLen = Proto.readU8(in);
+                byte[] nb = new byte[nameLen];
+                Proto.readFully(in, nb);
+                String roomName = new String(nb, StandardCharsets.UTF_8);
 
-                String newRoomId = UUID.randomUUID().toString();
-                this.currentRoom = roomManager.createRoom(newRoomId, roomName, this);
-                this.isHost = true;
-                
-                sendSimpleMessage(MSG_ROOM_CREATED + newRoomId);
+                currentRoom = rm.createRoom(roomName, this);
+                isHost = true;
+
+                byte[] payload = new byte[4];
+                writeIntTo(payload, 0, currentRoom.getId());
+                Proto.sendFrame(out, RespType.ROOM_CREATED.code, payload);
                 break;
-
-            case QUERY:
-                String list = roomManager.getAvailableRooms();
-                sendSimpleMessage(MSG_ROOM_LIST + list);
-                break;
-
-            case JOIN:
-                // 协议约定: [4字节 RoomID]
-                byte[] idBytes = new byte[4];
-                readFully(idBytes);
-                String targetId = new String(idBytes);
-
-                if (roomManager.joinRoom(targetId, this)) {
-                    this.currentRoom = roomManager.getRoom(targetId);
-                    this.isHost = false;
-                    sendSimpleMessage(MSG_JOIN_SUCCESS);
-                    // 通知房主
-                    this.currentRoom.getHost().sendSimpleMessage(MSG_GUEST_JOINED);
-                } else {
-                    sendSimpleMessage(MSG_JOIN_FAIL);
-                }
-                break;
-
-            case START:
-                // 只有房主能开始
-                if (isHost && currentRoom != null && currentRoom.isFull()) {
-                    currentRoom.setGaming(true);
-                    // 设置状态后，循环结束，进入下面的 forwardLoop
-                }
-                break;
-                
-            case LEAVE:
-                throw new IOException("User left room");
-        }
-    }
-
-    // 盲转发逻辑：不管半包粘包，读多少发多少
-    private void forwardLoop() throws IOException {
-        // 确定转发目标
-        ClientHandler opponent = isHost ? currentRoom.getGuest() : currentRoom.getHost();
-        OutputStream opponentOut = opponent.socket.getOutputStream();
-
-        byte[] buffer = new byte[1024];
-        int len;
-
-        while ((len = in.read(buffer)) != -1) {
-            opponentOut.write(buffer, 0, len);
-            opponentOut.flush(); // 必须立即 flush
-        }
-    }
-
-    // 辅助：发送简单字符串消息
-    public void sendSimpleMessage(String msg) throws IOException {
-        out.write(msg.getBytes());
-        out.flush();
-    }
-
-    // 辅助：确保读满指定长度
-    private void readFully(byte[] buffer) throws IOException {
-        int total = 0;
-        while (total < buffer.length) {
-            int count = in.read(buffer, total, buffer.length - total);
-            if (count == -1) {
-                throw new EOFException();
             }
-            total += count;
+
+            case QUERY: {
+                byte[] payload = buildRoomListPayload(rm);
+                Proto.sendFrame(out, RespType.ROOM_LIST.code, payload);
+                break;
+            }
+
+            case JOIN: {
+                int roomId = Proto.readIntBE(in);
+
+                Room r = rm.getRoom(roomId);
+                if (r == null) { sendJoinResult(false, 0); return; }
+                if (r.isGaming()) { sendError(ERR_NOT_READY); return; }
+                if (r.isFull()) { sendError(ERR_FULL); return; }
+
+                boolean ok = rm.joinRoom(roomId, this);
+                if (!ok) { sendJoinResult(false, 0); return; }
+
+                currentRoom = rm.getRoom(roomId);
+                isHost = false;
+
+                sendJoinResult(true, roomId);
+
+                // 推送给 host：guest joined
+                ClientHandler host = currentRoom.getHost();
+                if (host != null) {
+                    byte[] p = new byte[4];
+                    writeIntTo(p, 0, roomId);
+                    host.sendToClient(RespType.GUEST_JOINED.code, p);
+                }
+                break;
+            }
+
+            case START: {
+                if (!isHost || currentRoom == null) { sendError(ERR_NOT_HOST); return; }
+                if (!currentRoom.isFull()) { sendError(ERR_NOT_READY); return; }
+
+                currentRoom.setGaming(true);
+
+                // 双方都推 RELAY_BEGIN
+                Proto.sendFrame(out, RespType.RELAY_BEGIN.code, null);
+                ClientHandler guest = currentRoom.getGuest();
+                if (guest != null) guest.sendToClient(RespType.RELAY_BEGIN.code, null);
+                break;
+            }
+
+            case EXIT_ROOM: {
+                // host 退出房间但不断线
+                if (!isHost || currentRoom == null) { sendError(ERR_NOT_HOST); return; }
+                if (currentRoom.isGaming()) { sendError(ERR_NOT_READY); return; }
+
+                int roomId = currentRoom.getId();
+                ClientHandler guest = currentRoom.getGuest();
+
+                // 通知 guest：房间不存在/被退出（这里用 ROOM_EXITED 简化）
+                if (guest != null) {
+                    guest.sendToClient(RespType.ROOM_EXITED.code, null);
+                    // guest 侧的 currentRoom 需要靠客户端收到后自行清状态；
+                    // 服务端这里只负责不关 socket。
+                    guest.currentRoom = null;
+                    guest.isHost = false;
+                }
+
+                rm.removeRoom(roomId);
+
+                currentRoom = null;
+                isHost = false;
+
+                Proto.sendFrame(out, RespType.ROOM_EXITED.code, null);
+                break;
+            }
+
+            case LEAVE_ROOM: {
+                // guest 离开房间但不断线
+                if (isHost || currentRoom == null) { sendError(ERR_BAD_REQ); return; }
+                if (currentRoom.isGaming()) { sendError(ERR_NOT_READY); return; }
+
+                int roomId = currentRoom.getId();
+                Room r = rm.getRoom(roomId);
+                if (r == null) { sendError(ERR_NOT_FOUND); return; }
+
+                boolean ok = rm.leaveAsGuest(roomId, this);
+                if (!ok) { sendError(ERR_BAD_REQ); return; }
+
+                // 推送给 host：guest left
+                ClientHandler host = r.getHost();
+                if (host != null) {
+                    byte[] p = new byte[4];
+                    writeIntTo(p, 0, roomId);
+                    host.sendToClient(RespType.GUEST_LEFT.code, p);
+                }
+
+                currentRoom = null;
+                isHost = false;
+
+                Proto.sendFrame(out, RespType.ROOM_EXITED.code, null);
+                break;
+            }
+
+            case LEAVE:
+                // 仍保留：客户端真的要断开连接
+                throw new IOException("User left (disconnect)");
         }
     }
 
-    // 清理资源：断开一方，销毁房间，踢掉另一方
-    private void cleanup() {
+    private void forwardLoop() throws IOException {
+        ClientHandler opponent = isHost ? currentRoom.getGuest() : currentRoom.getHost();
+        if (opponent == null) return;
+
+        OutputStream oppOut = opponent.socket.getOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+
+        while ((n = socket.getInputStream().read(buf)) != -1) {
+            oppOut.write(buf, 0, n);
+            oppOut.flush();
+        }
+    }
+
+    private void sendJoinResult(boolean ok, int roomId) throws IOException {
+        byte[] payload = new byte[1 + 4];
+        payload[0] = (byte) (ok ? 1 : 0);
+        writeIntTo(payload, 1, roomId);
+        Proto.sendFrame(out, RespType.JOIN_RESULT.code, payload);
+    }
+
+    private void sendError(byte errCode) throws IOException {
+        Proto.sendFrame(out, RespType.ERROR.code, new byte[]{errCode});
+    }
+
+    public void sendToClient(byte respType, byte[] payload) throws IOException {
+        synchronized (this) {
+            Proto.sendFrame(this.out, respType, payload);
+        }
+    }
+
+    private byte[] buildRoomListPayload(RoomManager rm) {
+        // payload: [count:1] + count*([roomId:4][flags:1][nameLen:1][nameBytes])
+        java.util.ArrayList<Room> list = new java.util.ArrayList<>();
+        for (Room r : rm.allRooms()) {
+            if (list.size() >= 255) break;
+            list.add(r);
+        }
+
+        int total = 1;
+        for (Room r : list) {
+            byte[] nb = r.getName().getBytes(StandardCharsets.UTF_8);
+            int nameLen = Math.min(255, nb.length);
+            total += 4 + 1 + 1 + nameLen;
+        }
+
+        byte[] p = new byte[total];
+        p[0] = (byte) list.size();
+        int off = 1;
+
+        for (Room r : list) {
+            writeIntTo(p, off, r.getId()); off += 4;
+
+            int flags = 0;
+            if (r.isFull()) flags |= 1;
+            if (r.isGaming()) flags |= 2;
+            p[off++] = (byte) flags;
+
+            byte[] nb = r.getName().getBytes(StandardCharsets.UTF_8);
+            int nameLen = Math.min(255, nb.length);
+            p[off++] = (byte) nameLen;
+            System.arraycopy(nb, 0, p, off, nameLen);
+            off += nameLen;
+        }
+
+        return p;
+    }
+
+    private static void writeIntTo(byte[] b, int off, int v) {
+        b[off]     = (byte)((v >>> 24) & 0xFF);
+        b[off + 1] = (byte)((v >>> 16) & 0xFF);
+        b[off + 2] = (byte)((v >>> 8) & 0xFF);
+        b[off + 3] = (byte)(v & 0xFF);
+    }
+
+    private void cleanupOnDisconnect() {
         running = false;
         try { socket.close(); } catch (IOException ignored) {}
 
-        if (currentRoom != null) {
-            ClientHandler opponent = isHost ? currentRoom.getGuest() : currentRoom.getHost();
-            
-            // 连锁断开机制
-            if (opponent != null && !opponent.socket.isClosed()) {
-                try {
-                    opponent.socket.close(); 
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
-            // 从管理器移除房间
+        // 如果断线时还是 host 且房间存在，就移除房间；否则不动
+        if (currentRoom != null && isHost) {
             RoomManager.getInstance().removeRoom(currentRoom.getId());
         }
     }

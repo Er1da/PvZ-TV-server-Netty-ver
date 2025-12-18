@@ -2,64 +2,49 @@ package org.marshive;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * @author Qhbee
- */
 public class RoomManager {
-
-    // 1. 私有静态实例 (饿汉式单例，线程安全)
     private static final RoomManager INSTANCE = new RoomManager();
-
-    // 2. 私有构造方法，防止外部 new
     private RoomManager() {}
+    public static RoomManager getInstance() { return INSTANCE; }
 
-    // 3. 公共静态访问点
-    public static RoomManager getInstance() {
-        return INSTANCE;
-    }
+    private final Map<Integer, Room> rooms = new ConcurrentHashMap<>();
+    private final AtomicInteger idGen = new AtomicInteger(1000);
 
-    // 线程安全的 Map 存储房间
-    private final Map<String, Room> rooms = new ConcurrentHashMap<>();
-
-    // 创建房间
-    public Room createRoom(String id, String name, ClientHandler host) {
-        Room room = new Room(id, name, host);
-        rooms.put(id, room);
+    public Room createRoom(String name, ClientHandler host) {
+        int id = idGen.incrementAndGet();
+        Room r = new Room(id, name, host);
+        rooms.put(id, r);
         System.out.println("Room Created: " + id + " [" + name + "]");
-        return room;
+        return r;
     }
 
-    // 获取房间
-    public Room getRoom(String id) {
-        return rooms.get(id);
-    }
+    public Room getRoom(int id) { return rooms.get(id); }
 
-    // 加入房间
-    public synchronized boolean joinRoom(String id, ClientHandler guest) {
-        Room room = rooms.get(id);
-        // 只有房间存在、未满、且没开始游戏时才能加入
-        if (room != null && !room.isFull() && !room.isGaming()) {
-            room.setGuest(guest);
+    public synchronized boolean joinRoom(int id, ClientHandler guest) {
+        Room r = rooms.get(id);
+        if (r != null && !r.isFull() && !r.isGaming()) {
+            r.setGuest(guest);
             return true;
         }
         return false;
     }
 
-    // 移除房间
-    public void removeRoom(String id) {
-        if (id != null && rooms.containsKey(id)) {
-            rooms.remove(id);
-            System.out.println("Room Removed: " + id);
-        }
+    // guest 离开：只把 guest 置空，房间保留
+    public synchronized boolean leaveAsGuest(int id, ClientHandler guest) {
+        Room r = rooms.get(id);
+        if (r == null) return false;
+        if (r.getGuest() != guest) return false;
+        if (r.isGaming()) return false; // 游戏中不允许离开（你也可以允许）
+        r.setGuest(null);
+        return true;
     }
 
-    // 获取可加入房间列表
-    public String getAvailableRooms() {
-        return rooms.values().stream()
-                .filter(r -> !r.isFull() && !r.isGaming())
-                .map(r -> r.getId() + ":" + r.getName())
-                .collect(Collectors.joining(","));
+    public void removeRoom(int id) {
+        Room r = rooms.remove(id);
+        if (r != null) System.out.println("Room Removed: " + id);
     }
+
+    public Iterable<Room> allRooms() { return rooms.values(); }
 }
