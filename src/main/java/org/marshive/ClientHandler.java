@@ -89,8 +89,8 @@ public class ClientHandler implements Runnable {
                 break;
 
             case JOIN:
-                // 协议约定: [4字节 RoomID]
-                byte[] idBytes = new byte[4];
+                // 协议约定: [36字节 RoomID]
+                byte[] idBytes = new byte[36];
                 readFully(idBytes);
                 String targetId = new String(idBytes);
 
