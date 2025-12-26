@@ -1,4 +1,4 @@
-package org.marshive;
+package org.marshive.old;
 
 public class Room {
     private final int id;

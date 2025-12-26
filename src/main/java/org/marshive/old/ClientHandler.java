@@ -1,10 +1,18 @@
-package org.marshive;
+package org.marshive.old;
 
 import java.io.*;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * 处理单个客户端连接的请求，承担以下责任
+ * <ul>
+ *     <li>处理 I/O 请求</li>
+ *     <li>响应式解析命令</li>
+ *     <li>在游戏开始后，进行数据转发</li>
+ * </ul>
+ */
 public class ClientHandler implements Runnable {
 
     private static final byte ERR_BAD_REQ   = 1;
@@ -28,6 +36,7 @@ public class ClientHandler implements Runnable {
     @Override
     public void run() {
         try {
+            // 1. 初始化 I/O 流
             socket.setTcpNoDelay(true);
             in = new BufferedInputStream(socket.getInputStream());
             out = new BufferedOutputStream(socket.getOutputStream());
@@ -35,11 +44,14 @@ public class ClientHandler implements Runnable {
             // lobby 阶段：超时轮询，避免 guest 卡死无法切换 relay
             socket.setSoTimeout(300);
 
+            // 2. 主循环：处理请求
             while (running) {
+                // 2.1 如果房间已满且游戏开始，跳出循环进入转发阶段
                 if (currentRoom != null && currentRoom.isGaming() && currentRoom.isFull()) {
                     break;
                 }
 
+                // 2.2 读取请求类型
                 int b;
                 try {
                     b = in.read();
@@ -47,6 +59,7 @@ public class ClientHandler implements Runnable {
                     continue;
                 }
 
+                // 2.3 处理断线
                 if (b < 0) throw new EOFException("Client disconnected");
                 MsgType type = MsgType.fromByte((byte) b);
                 if (type == null) {
@@ -54,9 +67,11 @@ public class ClientHandler implements Runnable {
                     continue;
                 }
 
+                // 2.4 处理命令
                 handleCommand(type);
             }
 
+            // 3. 转发阶段：双方进入数据转发模式
             if (currentRoom != null && currentRoom.isGaming() && currentRoom.isFull()) {
                 socket.setSoTimeout(0);
                 Proto.sendFrame(out, RespType.RELAY_BEGIN.code, null);
@@ -66,6 +81,7 @@ public class ClientHandler implements Runnable {
         } catch (IOException e) {
             System.out.println("Connection closed: " + e.getMessage());
         } finally {
+            // 4. 清理连接资源
             cleanupOnDisconnect();
         }
     }
@@ -96,6 +112,7 @@ public class ClientHandler implements Runnable {
             }
 
             case JOIN: {
+                // 1. 数据获取和验证
                 int roomId = Proto.readIntBE(in);
 
                 Room r = rm.getRoom(roomId);
@@ -103,9 +120,11 @@ public class ClientHandler implements Runnable {
                 if (r.isGaming()) { sendError(ERR_NOT_READY); return; }
                 if (r.isFull()) { sendError(ERR_FULL); return; }
 
+                // 2. 尝试加入房间
                 boolean ok = rm.joinRoom(roomId, this);
                 if (!ok) { sendJoinResult(false, 0); return; }
 
+                // 3. 加入成功，更新状态并通知双方
                 currentRoom = rm.getRoom(roomId);
                 isHost = false;
 
@@ -201,6 +220,7 @@ public class ClientHandler implements Runnable {
         byte[] buf = new byte[4096];
         int n;
 
+        // 核心逻辑：转发数据
         while ((n = socket.getInputStream().read(buf)) != -1) {
             oppOut.write(buf, 0, n);
             oppOut.flush();
@@ -268,6 +288,9 @@ public class ClientHandler implements Runnable {
         b[off + 3] = (byte)(v & 0xFF);
     }
 
+    /*
+        forwardLoop 调用结束后，无法正常回到循环，逻辑上双方连接资源应该都被清理，且不需要保留房间
+     */
     private void cleanupOnDisconnect() {
         running = false;
         try { socket.close(); } catch (IOException ignored) {}

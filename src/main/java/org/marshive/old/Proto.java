@@ -1,7 +1,10 @@
-package org.marshive;
+package org.marshive.old;
 
 import java.io.*;
 
+/**
+ * <h1>数据包构造器</h1>
+ */
 public final class Proto {
     private Proto() {}
 
