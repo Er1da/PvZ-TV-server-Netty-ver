@@ -1,5 +1,6 @@
 package org.marshive.constant;
 
+@Deprecated
 public interface Configurations {
     /* 出入站协议相关 */
     // [数据包] -> [请求类型(1字节)]+[长度字段(4字节)]+[数据内容]

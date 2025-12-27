@@ -48,13 +48,13 @@ public class ServerApp {
                                             // 初始化完成后向 ClientManager 注册 Client
                                             clientManager.createClient(ch);
                                             
-                                            log.info("Client connected: {}", ch.id());
+                                            log.info("客户端已连接: {}", ch.remoteAddress());
                                         }
                                     });
         ChannelFuture bindFuture = bootstrap.bind(port);
         bindFuture.addListener(future -> {
             if (future.isSuccess()) {
-                log.info("Server started on port {}", port);
+                log.info("服务器成功在端口 {} 启动", port);
                 bindFuture.channel().closeFuture().addListener(f -> {
                     shutdown();
                     bossGroup.shutdownGracefully();

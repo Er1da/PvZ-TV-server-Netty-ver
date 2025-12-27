@@ -15,4 +15,12 @@ public class Room {
     public boolean isFull() {
         return host != null && guest != null;
     }
+    
+    @Override
+    public String toString() {
+        return "Room{" +
+               "id=" + id +
+               ", name='" + name + '\'' +
+               '}';
+    }
 }

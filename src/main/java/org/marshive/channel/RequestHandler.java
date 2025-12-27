@@ -31,6 +31,7 @@ public class RequestHandler extends ChannelInboundHandlerAdapter {
             case CREATE: {
                 final String roomName = (String) body.getPayload();
                 Room room = roomManager.createRoom(roomName, client);
+                log.info("[ip={}] 创建房间: {}", ctx.channel().remoteAddress(), room);
                 client.back(ResponseBody.of(ResponseType.ROOM_CREATED, room.getId()));
                 break;
             }

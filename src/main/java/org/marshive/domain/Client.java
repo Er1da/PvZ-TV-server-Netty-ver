@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.marshive.domain.data.ResponseBody;
 import org.marshive.util.IOUtils;
+import org.marshive.util.RoomManager;
 
 /**
  * 将连接逻辑交给{@link org.marshive.channel.RequestHandler}预处理，
@@ -49,6 +50,9 @@ public class Client {
         // 3. 添加结束监听器
         relayFuture.addListener(future -> {
             log.info("Relay between clients {} and {} ended.", a.remoteAddress(), b.remoteAddress());
+            if (isHost && currentRoom != null) {
+                RoomManager.getInstance().removeRoom(currentRoom.getId());
+            }
         });
     }
     

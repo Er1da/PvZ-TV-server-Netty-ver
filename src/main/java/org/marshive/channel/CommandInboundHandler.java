@@ -19,10 +19,7 @@ public class CommandInboundHandler extends ByteToMessageDecoder {
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
         // 1. 读取请求类型
-        if (in.readableBytes() < 2) {
-            return; // 等待更多数据
-        }
-        byte typeByte = in.readByte();
+        byte typeByte = in.getByte(0);
         RequestType type = RequestType.fromByte(typeByte);
         if (type == null) {
             throw new IllegalArgumentException("Unknown request type: " + typeByte);
@@ -53,6 +50,7 @@ public class CommandInboundHandler extends ByteToMessageDecoder {
             }
             case QUERY: {
                 // 查询房间列表无请求体
+                in.readByte();
                 req = new RequestBody<>(type, null);
                 break;
             }

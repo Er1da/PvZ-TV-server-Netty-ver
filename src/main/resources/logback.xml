@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<configuration>
+  <!--
+    配置集中管理属性
+
+  -->
+  <property name="pattern" value="%d{HH:mm:ss.SSS} %-5level -- [%magenta(%thread)]%boldYellow(%logger{1}) %cyan(%M) %L : %m%n">
+    <!--
+      日志输出格式：
+        %-5level
+        %d{yyyy-MM-dd HH:mm:ss.SSS}日期
+        %logger{1} 包名保留首字母的简写
+        %c类的完整名称
+        %M为method
+        %L为行号
+        %thread县城名称
+        %m或者%msg为信息
+        %n换行
+    -->
+  </property>
+
+<!--  控制台日志输出 appender  -->
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+<!--    控制输出流对象 默认 System.out 改为 Sys.err    -->
+    <target>System.out</target>
+<!--    日志消息格式配置    -->
+    <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+      <pattern>${pattern}</pattern>
+    </encoder>
+    <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+<!--      <level>TRACE</level>-->
+    </filter>
+  </appender>
+
+<!--  <root level="ALL">-->
+<!--    <appender-ref ref="CONSOLE"/>-->
+<!--  </root>-->
+
+  <logger name="org.marshive" additivity="false">
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+</configuration>

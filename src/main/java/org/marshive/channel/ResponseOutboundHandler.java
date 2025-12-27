@@ -36,7 +36,7 @@ public class ResponseOutboundHandler extends MessageToByteEncoder<ResponseBody<?
                 // TODO: 名字过长可能导致缓冲区溢出，需要限制名字长度
                 // payload: [count:1] + count*([roomId:4][flags:1][nameLen:1][nameBytes])
                 final Collection<Room> rooms = (Collection<Room>) body.getData();
-                final ByteBuf temp = ctx.alloc().buffer();
+                final ByteBuf temp = ctx.alloc().directBuffer();
                 
                 // 1. 写入总数
                 final int size = Math.min(rooms.size(), 255);
