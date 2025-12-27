@@ -22,8 +22,12 @@ public class ServerApp {
     
     public static void main(String[] args) {
         try {
-            if (args.length != 1) throw new IllegalArgumentException();
-            int port = Integer.parseInt(args[0]);
+            final int port;
+            if (args == null || args.length == 0 || args[0].isEmpty()) {
+                port = 9000; // 默认端口
+            } else {
+                port = Integer.parseInt(args[0]);
+            }
             start(port);
         } catch (IllegalArgumentException e) {
             System.err.println("Usage: java -jar marshive-server.jar <port>");

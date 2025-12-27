@@ -1,38 +1,88 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <configuration>
-  <!--
-    配置集中管理属性
-
-  -->
-  <property name="pattern" value="%d{HH:mm:ss.SSS} %-5level -- [%magenta(%thread)]%boldYellow(%logger{1}) %cyan(%M) %L : %m%n">
+  <!-- 配置集中管理属性 -->
+  <property name="console-pattern" value="%d{HH:mm:ss.SSS} %-5level -- [%magenta(%thread)]%boldYellow(%logger{1}) %cyan(%M) %L : %m%n"/>
+  <property name="file-pattern" value="%d{HH:mm:ss.SSS} %-5level -- [%thread]%logger{1} %M %L : %m%n"/>
     <!--
       日志输出格式：
-        %-5level
-        %d{yyyy-MM-dd HH:mm:ss.SSS}日期
+        %d{HH:mm:ss.SSS}日期
+        %-5level 日志级别
+        %thread 线程名称
         %logger{1} 包名保留首字母的简写
-        %c类的完整名称
-        %M为method
-        %L为行号
-        %thread县城名称
-        %m或者%msg为信息
-        %n换行
+        %M 为method
+        %L 为行号
+        %m 或%msg 为信息
+        %n 换行
     -->
-  </property>
 
-<!--  控制台日志输出appender  -->
+  <!-- 读取系统属性环境变量 -->
+  <property name="ENVIRONMENT" value="${environment:-dev}"/>
+
+  <!-- 控制台日志输出appender -->
   <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-<!--    控制输出流对象 默认 System.out   -->
+    <!-- 控制输出流对象 默认 System.out -->
     <target>System.out</target>
-<!--    日志消息格式配置    -->
+    <!-- 日志消息格式配置 -->
     <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
-      <pattern>${pattern}</pattern>
+      <pattern>${console-pattern}</pattern>
     </encoder>
-    <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
-<!--      <level>TRACE</level>-->
-    </filter>
   </appender>
 
-  <logger name="org.marshive" additivity="false">
-    <appender-ref ref="CONSOLE"/>
+  <!-- 文件日志输出 appender -->
+  <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>log/server.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <!-- 日志文件名格式 -->
+      <fileNamePattern>log/server.%d{yyyy-MM-dd}.log</fileNamePattern>
+      <!-- 保留7天的日志 -->
+      <maxHistory>7</maxHistory>
+      <!-- 总大小限制 -->
+      <totalSizeCap>10MB</totalSizeCap>
+    </rollingPolicy>
+    <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+      <pattern>${file-pattern}</pattern>
+    </encoder>
+  </appender>
+
+  <!-- 根据环境变量配置日志输出 -->
+  <if condition='property("ENVIRONMENT").equals("prod")'>
+    <then>
+      <!-- 生产环境：只输出到文件 -->
+      <root level="INFO">
+        <appender-ref ref="FILE"/>
+      </root>
+    </then>
+    <else>
+      <!-- 开发环境：只输出到控制台 -->
+      <root level="DEBUG">
+        <appender-ref ref="CONSOLE"/>
+      </root>
+    </else>
+  </if>
+
+  <!-- 指定包的日志配置 -->
+  <!-- 核心业务包：org.marshive -->
+  <logger name="org.marshive" level="DEBUG" additivity="false">
+    <if condition='property("ENVIRONMENT").equals("prod")'>
+      <then>
+        <appender-ref ref="FILE"/>
+      </then>
+      <else>
+        <appender-ref ref="CONSOLE"/>
+      </else>
+    </if>
   </logger>
+
+  <!-- 网络相关包 -->
+  <logger name="io.netty" level="INFO" additivity="false">
+    <if condition='property("ENVIRONMENT").equals("prod")'>
+      <then>
+        <appender-ref ref="FILE"/>
+      </then>
+      <else>
+        <appender-ref ref="CONSOLE"/>
+      </else>
+    </if>
+  </logger>
+
 </configuration>
