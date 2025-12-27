@@ -1,11 +1,11 @@
-package org.marshive.old;
+package org.marshive;
 
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.*;
 
-public class OldServerApp {
+public class ServerApp {
     private static final int PORT = 8889;
     private static final int MAX_PLAYERS = 500 * 2;
 

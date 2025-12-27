@@ -1,4 +1,4 @@
-package org.marshive.old;
+package org.marshive;
 
 public enum RespType {
     ROOM_CREATED ((byte) 0x81),
