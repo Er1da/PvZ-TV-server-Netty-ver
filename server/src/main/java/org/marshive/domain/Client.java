@@ -6,7 +6,7 @@ import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.marshive.domain.data.ResponseBody;
 import org.marshive.util.IOUtils;
-import org.marshive.util.RoomManager;
+import org.marshive.dao.RoomDAO;
 
 /**
  * 将连接逻辑交给{@link org.marshive.channel.RequestHandler}预处理，
@@ -45,13 +45,14 @@ public class Client {
         if (!a.isActive() || !b.isActive()) return;
         
         // 2. 进行数据转发
+        log.debug("开始游戏，建立客户端 {} 和 {} 之间的数据转发通道", a.remoteAddress(), b.remoteAddress());
         Future<?> relayFuture = IOUtils.relay(a, b);
         
         // 3. 添加结束监听器
         relayFuture.addListener(future -> {
             log.info("Relay between clients {} and {} ended.", a.remoteAddress(), b.remoteAddress());
             if (isHost && currentRoom != null) {
-                RoomManager.getInstance().removeRoom(currentRoom.getId());
+                RoomDAO.getInstance().removeRoom(currentRoom.getId());
             }
         });
     }

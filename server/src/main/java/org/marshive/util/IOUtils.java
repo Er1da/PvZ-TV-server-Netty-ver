@@ -3,6 +3,7 @@ package org.marshive.util;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandler;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.DefaultPromise;
@@ -25,27 +26,31 @@ public class IOUtils {
         DefaultPromise<?> closeFuture = new DefaultPromise<>(GlobalEventExecutor.INSTANCE);
         
         // 2. 创建转发处理器
-        ChannelInboundHandlerAdapter aToB = createRelayHandler(b);
-        ChannelInboundHandlerAdapter bToA = createRelayHandler(a);
+        ChannelInboundHandler aToB = createRelayHandler(b);
+        ChannelInboundHandler bToA = createRelayHandler(a);
         
         // 3. 添加到 pipeline 首部进行转发
         a.pipeline().addFirst("relay-" + a.id() + "-to-" + b.id(), aToB);
         b.pipeline().addFirst("relay-" + b.id() + "-to-" + a.id(), bToA);
         
         // 4. 添加结束动作，当任意一方结束传输数据时，移除转发处理器并完成 future
-        a.closeFuture().addListener(future -> closeFuture.setSuccess(null));
-        b.closeFuture().addListener(future -> closeFuture.setSuccess(null));
+        a.closeFuture().addListener(future -> trySetSuccess(closeFuture));
+        b.closeFuture().addListener(future -> trySetSuccess(closeFuture));
         
         // 5. 返回关闭 future
         return closeFuture;
     }
     
-    private ChannelInboundHandlerAdapter createRelayHandler(Channel toChannel) {
+    private ChannelInboundHandler createRelayHandler(Channel toChannel) {
         return new ChannelInboundHandlerAdapter() {
             @Override
             public void channelRead(ChannelHandlerContext ctx, Object msg) {
                 if (toChannel.isActive()) {
-                    toChannel.writeAndFlush(ReferenceCountUtil.retain(msg));
+                    toChannel.writeAndFlush(ReferenceCountUtil.retain(msg)).addListener(future -> {
+                        if (!future.isSuccess()) {
+                            ReferenceCountUtil.release(msg);
+                        }
+                    });
                 } else {
                     ReferenceCountUtil.release(msg);
                 }
@@ -69,5 +74,11 @@ public class IOUtils {
                 }
             }
         };
+    }
+    
+    private void trySetSuccess(DefaultPromise<?> promise) {
+        if (!promise.isDone()) {
+            promise.setSuccess(null);
+        }
     }
 }

@@ -7,10 +7,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.marshive.constant.ResponseType;
 import org.marshive.domain.Client;
 import org.marshive.domain.Room;
+import org.marshive.domain.data.JoinResult;
 import org.marshive.domain.data.RequestBody;
 import org.marshive.domain.data.ResponseBody;
-import org.marshive.util.ClientManager;
-import org.marshive.util.RoomManager;
+import org.marshive.dao.ClientDAO;
+import org.marshive.dao.RoomDAO;
 
 import java.util.Collection;
 
@@ -20,40 +21,57 @@ import java.util.Collection;
  */
 @Slf4j
 public class RequestHandler extends ChannelInboundHandlerAdapter {
-    private static final RoomManager roomManager = RoomManager.getInstance();
-    private static final ClientManager clientManager = ClientManager.getInstance();
+    private static final RoomDAO ROOM_DAO = RoomDAO.getInstance();
+    private static final ClientDAO CLIENT_DAO = ClientDAO.getInstance();
     
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         final RequestBody<?> body = (RequestBody<?>) msg;
-        final Client client = clientManager.getClient(ctx.channel());
+        final Client client = CLIENT_DAO.getClient(ctx.channel());
         switch (body.getType()) {
             case CREATE: {
                 final String roomName = (String) body.getPayload();
-                Room room = roomManager.createRoom(roomName, client);
-                log.info("[ip={}] 创建房间: {}", ctx.channel().remoteAddress(), room);
+                Room room = ROOM_DAO.createRoom(roomName, client);
                 client.back(ResponseBody.of(ResponseType.ROOM_CREATED, room.getId()));
                 break;
             }
             case QUERY: {
-                final Collection<Room> rooms = roomManager.allRooms();
+                final Collection<Room> rooms = ROOM_DAO.allRooms();
                 client.back(ResponseBody.of(ResponseType.ROOM_LIST, rooms));
                 break;
             }
             case JOIN: {
                 final Integer roomId = (Integer) body.getPayload();
-                final boolean success = roomManager.joinRoom(roomId, client);
+                final Room room = ROOM_DAO.getRoom(roomId);
+                // 1. 当房间不存在时
+                if (room == null) {
+                    client.back(ResponseBody.of(ResponseType.JOIN_RESULT, new JoinResult(false, 0)));
+                    break;
+                }
+                
+                // 2. 当房间已开始游戏时
+                if (room.isGaming()) {
+                    client.back(ResponseBody.NotReady);
+                    break;
+                }
+                
+                // 3. 当房间已满时
+                if (room.isFull()) {
+                    client.back(ResponseBody.RoomFull);
+                    break;
+                }
+                
+                final boolean success = ROOM_DAO.joinRoom(roomId, client);
                 if (success) {
-                    client.back(ResponseBody.of(ResponseType.JOIN_RESULT, roomId));
+                    client.back(ResponseBody.of(ResponseType.JOIN_RESULT, new JoinResult(true, roomId)));
                     // 通知房主有新房客加入
-                    Room room = roomManager.getRoom(roomId);
                     Client host = room.getHost();
                     if (host != null) {
                         host.back(ResponseBody.of(ResponseType.GUEST_JOINED, roomId));
                     }
                 } else {
                     // 0作为加入失败的标志
-                    client.back(ResponseBody.of(ResponseType.JOIN_RESULT, 0));
+                    client.back(ResponseBody.of(ResponseType.JOIN_RESULT, new JoinResult(false, 0)));
                 }
                 break;
             }
@@ -76,6 +94,9 @@ public class RequestHandler extends ChannelInboundHandlerAdapter {
                 final Client guest = currentRoom.getGuest();
                 client.back(ResponseBody.of(ResponseType.RELAY_BEGIN));
                 guest.back(ResponseBody.of(ResponseType.RELAY_BEGIN));
+                
+                // 4. 启动数据转发
+                client.forwardLoop(guest);
                 break;
             }
             case EXIT_ROOM: {
@@ -99,7 +120,7 @@ public class RequestHandler extends ChannelInboundHandlerAdapter {
                 
                 // 3. 清理房间
                 final int roomId = currentRoom.getId();
-                roomManager.removeRoom(roomId);
+                ROOM_DAO.removeRoom(roomId);
                 
                 // 4. 清理房主状态
                 client.clearState();
@@ -117,13 +138,13 @@ public class RequestHandler extends ChannelInboundHandlerAdapter {
                 } else if (currentRoom.isGaming()) {
                     client.back(ResponseBody.NotReady);
                     break;
-                } else if (roomManager.getRoom(currentRoom.getId()) == null) {
+                } else if (ROOM_DAO.getRoom(currentRoom.getId()) == null) {
                     client.back(ResponseBody.NotFound);
                 }
                 
                 // 2. 尝试离开房间
                 final int roomId = currentRoom.getId();
-                final boolean success = roomManager.leaveAsGuest(roomId, client);
+                final boolean success = ROOM_DAO.leaveAsGuest(roomId, client);
                 if (!success) {
                     client.back(ResponseBody.BadRequest);
                     break;

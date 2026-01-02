@@ -1,16 +1,17 @@
-package org.marshive.util;
+package org.marshive.dao;
 
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelId;
 import org.marshive.domain.Client;
 
+import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class ClientManager {
-    private static final ClientManager INSTANCE = new ClientManager();
-    private ClientManager() {}
-    public static ClientManager getInstance() { return INSTANCE; }
+public class ClientDAO {
+    private static final ClientDAO INSTANCE = new ClientDAO();
+    private ClientDAO() {}
+    public static ClientDAO getInstance() { return INSTANCE; }
     
     private final Map<ChannelId, Client> clients = new ConcurrentHashMap<>();
     
@@ -30,5 +31,9 @@ public class ClientManager {
     
     public void closeAllClients() {
         clients.values().forEach(Client::close);
+    }
+    
+    public Collection<Client> allClients() {
+        return clients.values();
     }
 }

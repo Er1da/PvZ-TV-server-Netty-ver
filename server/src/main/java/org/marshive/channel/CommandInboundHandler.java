@@ -30,17 +30,13 @@ public class CommandInboundHandler extends ByteToMessageDecoder {
         switch (type) {
             case CREATE: {
                 // 2.1 检查数据包长度
-                byte b1 = in.getByte(1);
-                byte b2 = in.getByte(2);
-                byte b3 = in.getByte(3);
-                byte b4 = in.getByte(4);
-                int nameLength = ((b1 & 0xFF) << 24) | ((b2 & 0xFF) << 16) | ((b3 & 0xFF) << 8) | (b4 & 0xFF);
-                if (!hasEnoughBytes(in, 1 + 4 + nameLength)) {
+                int nameLength = in.getByte(1);
+                if (!hasEnoughBytes(in, 1 + 1 + nameLength)) {
                     return; // 等待更多数据
                 }
                 // 2.2 读取房间名称
                 in.readByte(); // 读掉 type 字节
-                in.readInt(); // 读掉 length 字节
+                in.readByte(); // 读掉 length 字节
                 byte[] nameBytes = new byte[nameLength];
                 in.readBytes(nameBytes);
                 String roomName = new String(nameBytes, StandardCharsets.UTF_8);

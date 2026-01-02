@@ -4,7 +4,9 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.MessageToByteEncoder;
 import lombok.extern.slf4j.Slf4j;
+import org.marshive.constant.ResponseType;
 import org.marshive.domain.Room;
+import org.marshive.domain.data.JoinResult;
 import org.marshive.domain.data.ResponseBody;
 
 import java.util.Collection;
@@ -20,7 +22,11 @@ public class ResponseOutboundHandler extends MessageToByteEncoder<ResponseBody<?
         out.writeByte(body.getType().code);
         
         // 2. 检查是否有负载
-        if (body.getData() == null) return;
+        /* RELAY_BEGIN, ROOM_EXITED */
+        if (body.getData() == null) {
+            out.writeShort(0);
+            return;
+        }
         
         // 3. 根据不同的响应类型写入负载
         switch (body.getType()) {
@@ -28,8 +34,15 @@ public class ResponseOutboundHandler extends MessageToByteEncoder<ResponseBody<?
             case GUEST_LEFT:
             case GUEST_JOINED: {
                 final int roomId = (Integer) body.getData();
-                out.writeByte(4);
+                out.writeShort(4);
                 out.writeInt(roomId);
+                break;
+            }
+            case JOIN_RESULT: {
+                final JoinResult jr = (JoinResult) body.getData();
+                out.writeShort(5);
+                out.writeByte(jr.isSuccess() ? 1 : 0);
+                out.writeInt(jr.getRoomId());
                 break;
             }
             case ROOM_LIST: {
@@ -61,11 +74,17 @@ public class ResponseOutboundHandler extends MessageToByteEncoder<ResponseBody<?
                 });
                 
                 // 3. 将临时缓冲区的数据写入输出缓冲区
-                out.writeByte(temp.readableBytes());
+                out.writeShort(temp.readableBytes());
                 out.writeBytes(temp);
                 
                 // 4. 释放临时缓冲区
                 temp.release();
+                break;
+            }
+            // 错误响应 ERROR
+            default: {
+                out.writeShort(1);
+                out.writeByte(((ResponseType) body.getData()).code);
                 break;
             }
         }
