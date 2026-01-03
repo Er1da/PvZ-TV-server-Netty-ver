@@ -21,6 +21,8 @@ import org.marshive.util.InstructionHelper;
 public class ServerApp {
     private static final ClientDAO CLIENT_DAO = ClientDAO.getInstance();
     
+    private static final String ENVIRONMENT = System.getProperty("environment");
+    
     public static void main(String[] args) {
         try {
             final int port;
@@ -79,7 +81,9 @@ public class ServerApp {
                     bossGroup.shutdownGracefully();
                     workerGroup.shutdownGracefully();
                 });
-                InstructionHelper.run(GlobalEventExecutor.INSTANCE);
+                if (!"prod".equals(ENVIRONMENT)) {
+                    InstructionHelper.run(GlobalEventExecutor.INSTANCE);
+                }
             } else {
                 log.error("Failed to start server on port {}", port, future.cause());
                 bossGroup.shutdownGracefully();
