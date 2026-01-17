@@ -26,6 +26,7 @@ public class FrameBuffer {
     private final FrameStorage storage;
     private final long startTime;
     private final List<FrameParsingListener> parsingListeners = new CopyOnWriteArrayList<>();
+    private volatile boolean notifyIndividualFrames = true;
     
     /**
      * 创建一个新的帧缓冲区
@@ -94,8 +95,10 @@ public class FrameBuffer {
                 storage.store(frame);
             }
             
-            // 异步通知所有解析监听器
-            notifyFrameParsed(frame);
+            // 异步通知所有解析监听器（如果启用单帧通知）
+            if (notifyIndividualFrames) {
+                notifyFrameParsed(frame);
+            }
             
             log.debug("解析到帧: {}", frame);
         }
@@ -184,6 +187,24 @@ public class FrameBuffer {
     }
     
     /**
+     * 设置是否通知单个帧解析事件。
+     * 禁用单帧通知可以提高批量处理性能，此时只会触发批量解析完成通知。
+     * 
+     * @param notifyIndividualFrames 是否通知单帧解析事件，默认为 true
+     */
+    public void setNotifyIndividualFrames(boolean notifyIndividualFrames) {
+        this.notifyIndividualFrames = notifyIndividualFrames;
+    }
+    
+    /**
+     * 检查是否通知单个帧解析事件
+     * @return 是否通知单帧解析事件
+     */
+    public boolean isNotifyIndividualFrames() {
+        return notifyIndividualFrames;
+    }
+    
+    /**
      * 通知所有监听器单个帧已解析
      * @param frame 解析完成的帧
      */
@@ -193,7 +214,7 @@ public class FrameBuffer {
                 listener.onFrameParsed(frame);
             } catch (Exception e) {
                 log.error("通知解析监听器失败: {}", e.getMessage());
-                notifyParsingError(e);
+                // 不调用 notifyParsingError 避免递归风险
             }
         }
     }
@@ -208,7 +229,7 @@ public class FrameBuffer {
                 listener.onFramesParsed(frames);
             } catch (Exception e) {
                 log.error("通知批量解析监听器失败: {}", e.getMessage());
-                notifyParsingError(e);
+                // 不调用 notifyParsingError 避免递归风险
             }
         }
     }
