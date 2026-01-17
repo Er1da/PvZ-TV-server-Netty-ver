@@ -6,12 +6,14 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 用于缓存和管理数据帧的缓冲区。
  * <ul>
  *     <li>拷贝来自 {@link FrameParser} 的数据，并提供监听此缓冲区的接口</li>
  *     <li>追加数据和解析数据为异步操作</li>
+ *     <li>支持通过 {@link FrameParsingListener} 监听器异步通知解析结果</li>
  * </ul>
  * 
  * 数据帧格式: [type:1][size:1][payload:0~n]
@@ -23,6 +25,7 @@ public class FrameBuffer {
     private final ByteBuf buffer;
     private final FrameStorage storage;
     private final long startTime;
+    private final List<FrameParsingListener> parsingListeners = new CopyOnWriteArrayList<>();
     
     /**
      * 创建一个新的帧缓冲区
@@ -91,11 +94,19 @@ public class FrameBuffer {
                 storage.store(frame);
             }
             
+            // 异步通知所有解析监听器
+            notifyFrameParsed(frame);
+            
             log.debug("解析到帧: {}", frame);
         }
         
         // 丢弃已读取的数据
         buffer.discardReadBytes();
+        
+        // 通知批量解析完成
+        if (!frames.isEmpty()) {
+            notifyFramesParsed(frames);
+        }
         
         return frames;
     }
@@ -134,6 +145,98 @@ public class FrameBuffer {
         }
         if (storage != null) {
             storage.close();
+        }
+        // 通知所有监听器解析已关闭
+        notifyParsingClosed();
+    }
+    
+    /**
+     * 添加解析监听器
+     * @param listener 解析监听器
+     */
+    public void addParsingListener(FrameParsingListener listener) {
+        if (listener != null) {
+            parsingListeners.add(listener);
+        }
+    }
+    
+    /**
+     * 移除解析监听器
+     * @param listener 要移除的监听器
+     */
+    public void removeParsingListener(FrameParsingListener listener) {
+        parsingListeners.remove(listener);
+    }
+    
+    /**
+     * 移除所有解析监听器
+     */
+    public void clearParsingListeners() {
+        parsingListeners.clear();
+    }
+    
+    /**
+     * 获取当前注册的解析监听器数量
+     * @return 监听器数量
+     */
+    public int getParsingListenerCount() {
+        return parsingListeners.size();
+    }
+    
+    /**
+     * 通知所有监听器单个帧已解析
+     * @param frame 解析完成的帧
+     */
+    private void notifyFrameParsed(ParsedFrame frame) {
+        for (FrameParsingListener listener : parsingListeners) {
+            try {
+                listener.onFrameParsed(frame);
+            } catch (Exception e) {
+                log.error("通知解析监听器失败: {}", e.getMessage());
+                notifyParsingError(e);
+            }
+        }
+    }
+    
+    /**
+     * 通知所有监听器批量帧已解析
+     * @param frames 解析完成的帧列表
+     */
+    private void notifyFramesParsed(List<ParsedFrame> frames) {
+        for (FrameParsingListener listener : parsingListeners) {
+            try {
+                listener.onFramesParsed(frames);
+            } catch (Exception e) {
+                log.error("通知批量解析监听器失败: {}", e.getMessage());
+                notifyParsingError(e);
+            }
+        }
+    }
+    
+    /**
+     * 通知所有监听器解析发生错误
+     * @param cause 异常原因
+     */
+    private void notifyParsingError(Throwable cause) {
+        for (FrameParsingListener listener : parsingListeners) {
+            try {
+                listener.onParsingError(cause);
+            } catch (Exception e) {
+                log.error("通知解析错误监听器失败: {}", e.getMessage());
+            }
+        }
+    }
+    
+    /**
+     * 通知所有监听器解析已关闭
+     */
+    private void notifyParsingClosed() {
+        for (FrameParsingListener listener : parsingListeners) {
+            try {
+                listener.onParsingClosed();
+            } catch (Exception e) {
+                log.error("通知解析关闭监听器失败: {}", e.getMessage());
+            }
         }
     }
 }
