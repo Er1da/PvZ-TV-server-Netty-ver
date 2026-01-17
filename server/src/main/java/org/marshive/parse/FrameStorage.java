@@ -4,8 +4,9 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
@@ -41,9 +42,12 @@ public class FrameStorage {
         File dir = new File(DEFAULT_DIR);
         if (!dir.exists()) {
             boolean created = dir.mkdirs();
-            if (created) {
-                log.info("创建帧数据存储目录: {}", dir.getAbsolutePath());
+            if (!created && !dir.exists()) {
+                log.error("创建帧数据存储目录失败: {}", dir.getAbsolutePath());
             }
+        }
+        if (dir.exists()) {
+            log.info("帧数据存储目录: {}", dir.getAbsolutePath());
         }
         
         SimpleDateFormat sdf = new SimpleDateFormat(DATE_FORMAT);
@@ -55,7 +59,7 @@ public class FrameStorage {
     
     private void initWriter() {
         try {
-            writer = new BufferedWriter(new FileWriter(storageFile, true));
+            writer = Files.newBufferedWriter(storageFile.toPath(), StandardCharsets.UTF_8);
             log.info("帧数据将存储到文件: {}", storageFile.getAbsolutePath());
         } catch (IOException e) {
             log.error("无法创建帧存储文件: {}", e.getMessage());

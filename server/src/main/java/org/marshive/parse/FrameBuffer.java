@@ -61,8 +61,9 @@ public class FrameBuffer {
             
             // 检查数据包大小是否合理
             if (packetSize < HEADER_SIZE) {
-                log.warn("无效的数据包大小: {}, 跳过", packetSize);
-                continue;
+                log.warn("无效的数据包大小: {}, 丢弃该字节", packetSize);
+                // 跳过这个无效的数据包，避免死循环
+                break;
             }
             
             int payloadSize = packetSize - HEADER_SIZE;
