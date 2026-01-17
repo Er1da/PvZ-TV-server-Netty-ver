@@ -10,6 +10,7 @@ import io.netty.util.concurrent.DefaultPromise;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import lombok.experimental.UtilityClass;
+import org.marshive.parse.FrameParser;
 
 @UtilityClass
 public class IOUtils {
@@ -30,7 +31,7 @@ public class IOUtils {
         ChannelInboundHandler bToA = createRelayHandler(a);
         
         // 3. 添加到 pipeline 首部进行转发
-        a.pipeline().addFirst("relay-" + a.id() + "-to-" + b.id(), aToB);
+        a.pipeline().addFirst("relay-" + a.id() + "-to-" + b.id(), aToB).addFirst("parser", new FrameParser());
         b.pipeline().addFirst("relay-" + b.id() + "-to-" + a.id(), bToA);
         
         // 4. 添加结束动作，当任意一方结束传输数据时，移除转发处理器并完成 future
