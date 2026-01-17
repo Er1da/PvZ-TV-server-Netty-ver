@@ -16,6 +16,9 @@ import java.util.Collection;
  */
 @Slf4j
 public class ResponseOutboundHandler extends MessageToByteEncoder<ResponseBody<?>> {
+//    private static final int HEADER_SIZE = 3;  // type(1) + length(2)
+    private static final int HEADER_SIZE = 0;  // type(1) + length(2)
+    
     @Override
     protected void encode(ChannelHandlerContext ctx, ResponseBody<?> body, ByteBuf out) throws Exception {
         // 1. 写入响应类型
@@ -24,7 +27,7 @@ public class ResponseOutboundHandler extends MessageToByteEncoder<ResponseBody<?
         // 2. 检查是否有负载
         /* RELAY_BEGIN, ROOM_EXITED */
         if (body.getData() == null) {
-            out.writeShort(0);
+            out.writeShort(HEADER_SIZE);
             return;
         }
         
@@ -34,19 +37,18 @@ public class ResponseOutboundHandler extends MessageToByteEncoder<ResponseBody<?
             case GUEST_LEFT:
             case GUEST_JOINED: {
                 final int roomId = (Integer) body.getData();
-                out.writeShort(4);
+                out.writeShort(HEADER_SIZE + 4);
                 out.writeInt(roomId);
                 break;
             }
             case JOIN_RESULT: {
                 final JoinResult jr = (JoinResult) body.getData();
-                out.writeShort(5);
+                out.writeShort(HEADER_SIZE + 5);
                 out.writeByte(jr.isSuccess() ? 1 : 0);
                 out.writeInt(jr.getRoomId());
                 break;
             }
             case ROOM_LIST: {
-                // TODO: 名字过长可能导致缓冲区溢出，需要限制名字长度
                 // payload: [count:1] + count*([roomId:4][flags:1][nameLen:1][nameBytes])
                 final Collection<Room> rooms = (Collection<Room>) body.getData();
                 final ByteBuf temp = ctx.alloc().directBuffer();
@@ -74,7 +76,7 @@ public class ResponseOutboundHandler extends MessageToByteEncoder<ResponseBody<?
                 });
                 
                 // 3. 将临时缓冲区的数据写入输出缓冲区
-                out.writeShort(temp.readableBytes());
+                out.writeShort(temp.readableBytes() + HEADER_SIZE);
                 out.writeBytes(temp);
                 
                 // 4. 释放临时缓冲区
@@ -83,7 +85,7 @@ public class ResponseOutboundHandler extends MessageToByteEncoder<ResponseBody<?
             }
             // 错误响应 ERROR
             default: {
-                out.writeShort(1);
+                out.writeShort(HEADER_SIZE + 1);
                 out.writeByte(((ResponseType) body.getData()).code);
                 break;
             }

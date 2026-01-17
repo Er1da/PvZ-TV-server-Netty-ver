@@ -8,6 +8,7 @@ import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import lombok.extern.slf4j.Slf4j;
 import org.marshive.channel.CommandInboundHandler;
@@ -52,6 +53,7 @@ public class ServerApp {
                                         protected void initChannel(SocketChannel ch) throws Exception {
                                             // 2.1 初始化流水线
                                             ch.pipeline()
+//                                            .addLast(new LengthFieldBasedFrameDecoder(127, 1, 1, -2, 0))
                                             .addLast(new ProtoInboundChannelHandler())
                                             .addLast(new CommandInboundHandler())
                                             .addLast(new RequestHandler())

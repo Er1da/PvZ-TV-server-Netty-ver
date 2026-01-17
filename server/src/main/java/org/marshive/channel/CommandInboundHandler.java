@@ -25,48 +25,49 @@ public class CommandInboundHandler extends ByteToMessageDecoder {
             throw new IllegalArgumentException("Unknown request type: " + typeByte);
         }
         
-        // 2. 根据请求类型包装请求体
+        // 3. 根据请求类型包装请求体
         final RequestBody<?> req;
         switch (type) {
             case CREATE: {
-                // 2.1 检查数据包长度
+                // 3.1 检查是否有足够的字节读取房间名称长度
                 int nameLength = in.getByte(1);
-                if (!hasEnoughBytes(in, 1 + 1 + nameLength)) {
+                if (!hasEnoughBytes(in, 2 + nameLength)) {
                     return; // 等待更多数据
                 }
-                // 2.2 读取房间名称
-                in.readByte(); // 读掉 type 字节
-                in.readByte(); // 读掉 length 字节
+                
+                // 3.2 去除头部
+                in.skipBytes(2);
+                
+                // 3.2 读取房间名称
                 byte[] nameBytes = new byte[nameLength];
                 in.readBytes(nameBytes);
                 String roomName = new String(nameBytes, StandardCharsets.UTF_8);
-                // 2.3 构造请求体对象并向下传递
+                // 3.2 构造请求体对象并向下传递
                 req = new RequestBody<>(type, roomName);
                 break;
             }
             case QUERY: {
                 // 查询房间列表无请求体
-                in.readByte();
+                in.skipBytes(1);
                 req = new RequestBody<>(type, null);
                 break;
             }
             case JOIN: {
-                // 2.1 检查数据包长度
-                if (!hasEnoughBytes(in, 1 + 4)) {
+                if (!hasEnoughBytes(in, 5)) {
                     return; // 等待更多数据
                 }
-                // 2.2 读取房间ID
-                in.readByte(); // 读掉 type 字节
+                // 3.1 读取房间ID
+                in.skipBytes(1);
                 int roomId = in.readInt();
-                // 2.3 构造请求体对象并向下传递
+                // 3.2 构造请求体对象并向下传递
                 req = new RequestBody<>(type, roomId);
                 break;
             }
             case START:
             case EXIT_ROOM:
             case LEAVE_ROOM: {
-                in.readByte();
-
+                // 这些请求无请求体
+                in.skipBytes(1);
                 req = new RequestBody<>(type, null);
                 break;
             }
@@ -74,7 +75,7 @@ public class CommandInboundHandler extends ByteToMessageDecoder {
                 throw new IOException("未知的请求: " + typeByte);
         }
         
-        // 3. 将解析后的请求体对象传递给下一个处理器
+        // 4. 将解析后的请求体对象传递给下一个处理器
         out.add(req);
     }
     
@@ -84,7 +85,7 @@ public class CommandInboundHandler extends ByteToMessageDecoder {
         ctx.close();
     }
     
-    private static boolean hasEnoughBytes(ByteBuf in, int required) {
-        return in.readableBytes() >= required;
+    private boolean hasEnoughBytes(ByteBuf in, int requiredLength) {
+        return in.readableBytes() >= requiredLength;
     }
 }
