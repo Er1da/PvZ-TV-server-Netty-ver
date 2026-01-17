@@ -12,8 +12,12 @@ import io.netty.util.concurrent.GlobalEventExecutor;
 import lombok.experimental.UtilityClass;
 import org.marshive.parse.FrameParser;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 @UtilityClass
 public class IOUtils {
+    private static final AtomicLong SESSION_COUNTER = new AtomicLong(0);
+    
     public void writeIntBE(ByteBuf buf, int value) {
         buf.writeInt(value);
     }
@@ -26,19 +30,26 @@ public class IOUtils {
         // 1. 构造 future 对象
         DefaultPromise<?> closeFuture = new DefaultPromise<>(GlobalEventExecutor.INSTANCE);
         
-        // 2. 创建转发处理器
+        // 2. 生成唯一的会话ID
+        String sessionId = "session_" + SESSION_COUNTER.incrementAndGet();
+        
+        // 3. 创建转发处理器
         ChannelInboundHandler aToB = createRelayHandler(b);
         ChannelInboundHandler bToA = createRelayHandler(a);
         
-        // 3. 添加到 pipeline 首部进行转发
-        a.pipeline().addFirst("relay-" + a.id() + "-to-" + b.id(), aToB).addFirst("parser", new FrameParser());
-        b.pipeline().addFirst("relay-" + b.id() + "-to-" + a.id(), bToA);
+        // 4. 创建帧解析器，分别解析双向数据
+        FrameParser parserHostToGuest = new FrameParser(sessionId, "host-to-guest");
+        FrameParser parserGuestToHost = new FrameParser(sessionId, "guest-to-host");
         
-        // 4. 添加结束动作，当任意一方结束传输数据时，移除转发处理器并完成 future
+        // 5. 添加到 pipeline 首部进行转发和解析
+        a.pipeline().addFirst("relay-" + a.id() + "-to-" + b.id(), aToB).addFirst("parser", parserHostToGuest);
+        b.pipeline().addFirst("relay-" + b.id() + "-to-" + a.id(), bToA).addFirst("parser", parserGuestToHost);
+        
+        // 6. 添加结束动作，当任意一方结束传输数据时，移除转发处理器并完成 future
         a.closeFuture().addListener(future -> trySetSuccess(closeFuture));
         b.closeFuture().addListener(future -> trySetSuccess(closeFuture));
         
-        // 5. 返回关闭 future
+        // 7. 返回关闭 future
         return closeFuture;
     }
     
