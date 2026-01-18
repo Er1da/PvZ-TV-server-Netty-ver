@@ -100,7 +100,7 @@ public class FrameBuffer {
                 notifyFrameParsed(frame);
             }
             
-            log.debug("解析到帧: {}", frame);
+//            log.debug("解析到帧: {}", frame);
         }
         
         // 丢弃已读取的数据

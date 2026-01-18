@@ -9,6 +9,7 @@ COPY server.jar /app/server.jar
 
 # 创建日志目录（如果不存在）
 RUN mkdir -p /app/log
+RUN mkdir -p /app/frames
 
 # 暴露 9000 端口（固定）
 EXPOSE 9000

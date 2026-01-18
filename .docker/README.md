@@ -24,6 +24,7 @@
    docker run -d \
      -p 9000:9000 \
      -v $(pwd)/logs:/app/log \
+     -v $(pwd)/frames:/app/frames \
      --name pvz-server \
      pvz-server:latest
    ```
