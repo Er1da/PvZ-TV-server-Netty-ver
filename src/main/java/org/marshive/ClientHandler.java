@@ -14,6 +14,9 @@ public class ClientHandler implements Runnable {
     private static final byte ERR_NOT_READY = 5;
 
     private final Socket socket;
+    private final RoomManager rm;   // ✅ 当前端口对应的房间管理器
+    private final int shardId;      // ✅ 仅用于日志
+
     private InputStream in;
     private OutputStream out;
 
@@ -21,8 +24,10 @@ public class ClientHandler implements Runnable {
     private boolean isHost = false;
     private volatile boolean running = true;
 
-    public ClientHandler(Socket socket) {
+    public ClientHandler(Socket socket, RoomManager rm, int shardId) {
         this.socket = socket;
+        this.rm = rm;
+        this.shardId = shardId;
     }
 
     @Override
@@ -32,10 +37,11 @@ public class ClientHandler implements Runnable {
             in = new BufferedInputStream(socket.getInputStream());
             out = new BufferedOutputStream(socket.getOutputStream());
 
-            // lobby 阶段：超时轮询，避免 guest 卡死无法切换 relay
+            // lobby 阶段：超时轮询，避免 read 永久阻塞
             socket.setSoTimeout(300);
 
             while (running) {
+                // ✅ 一旦房间满足“开始转发”条件，跳出 lobby loop，进入 relay
                 if (currentRoom != null && currentRoom.isGaming() && currentRoom.isFull()) {
                     break;
                 }
@@ -57,22 +63,20 @@ public class ClientHandler implements Runnable {
                 handleCommand(type);
             }
 
+            // relay：只做纯转发
             if (currentRoom != null && currentRoom.isGaming() && currentRoom.isFull()) {
                 socket.setSoTimeout(0);
-                Proto.sendFrame(out, RespType.RELAY_BEGIN.code, null);
                 forwardLoop();
             }
 
         } catch (IOException e) {
-            System.out.println("Connection closed: " + e.getMessage());
+            System.out.println("[shard=" + shardId + "] Connection closed: " + e.getMessage());
         } finally {
             cleanupOnDisconnect();
         }
     }
 
     private void handleCommand(MsgType type) throws IOException {
-        RoomManager rm = RoomManager.getInstance();
-
         switch (type) {
             case CREATE: {
                 int nameLen = Proto.readU8(in);
@@ -90,7 +94,7 @@ public class ClientHandler implements Runnable {
             }
 
             case QUERY: {
-                byte[] payload = buildRoomListPayload(rm);
+                byte[] payload = buildRoomListPayload(rm); // ✅ 只返回当前端口的房间
                 Proto.sendFrame(out, RespType.ROOM_LIST.code, payload);
                 break;
             }
@@ -127,7 +131,7 @@ public class ClientHandler implements Runnable {
 
                 currentRoom.setGaming(true);
 
-                // 双方都推 RELAY_BEGIN
+                // ✅ 只在这里发一次 RELAY_BEGIN 给双方（修复“发两次0x85”）
                 Proto.sendFrame(out, RespType.RELAY_BEGIN.code, null);
                 ClientHandler guest = currentRoom.getGuest();
                 if (guest != null) guest.sendToClient(RespType.RELAY_BEGIN.code, null);
@@ -142,11 +146,8 @@ public class ClientHandler implements Runnable {
                 int roomId = currentRoom.getId();
                 ClientHandler guest = currentRoom.getGuest();
 
-                // 通知 guest：房间不存在/被退出（这里用 ROOM_EXITED 简化）
                 if (guest != null) {
                     guest.sendToClient(RespType.ROOM_EXITED.code, null);
-                    // guest 侧的 currentRoom 需要靠客户端收到后自行清状态；
-                    // 服务端这里只负责不关 socket。
                     guest.currentRoom = null;
                     guest.isHost = false;
                 }
@@ -188,7 +189,7 @@ public class ClientHandler implements Runnable {
             }
 
             case LEAVE:
-                // 仍保留：客户端真的要断开连接
+                // 客户端真的要断开连接
                 throw new IOException("User left (disconnect)");
         }
     }
@@ -197,11 +198,14 @@ public class ClientHandler implements Runnable {
         ClientHandler opponent = isHost ? currentRoom.getGuest() : currentRoom.getHost();
         if (opponent == null) return;
 
+        // 注意：对手 out 可能是 BufferedOutputStream（你原来这么用的）
         OutputStream oppOut = opponent.socket.getOutputStream();
+
         byte[] buf = new byte[4096];
         int n;
+        InputStream rawIn = socket.getInputStream();
 
-        while ((n = socket.getInputStream().read(buf)) != -1) {
+        while ((n = rawIn.read(buf)) != -1) {
             oppOut.write(buf, 0, n);
             oppOut.flush();
         }
@@ -227,7 +231,10 @@ public class ClientHandler implements Runnable {
     private byte[] buildRoomListPayload(RoomManager rm) {
         // payload: [count:1] + count*([roomId:4][flags:1][nameLen:1][nameBytes])
         java.util.ArrayList<Room> list = new java.util.ArrayList<>();
+
+        // ✅ 只收集未开打房间
         for (Room r : rm.allRooms()) {
+            if (r.isGaming()) continue;          // <<<<<< 关键过滤
             if (list.size() >= 255) break;
             list.add(r);
         }
@@ -248,7 +255,8 @@ public class ClientHandler implements Runnable {
 
             int flags = 0;
             if (r.isFull()) flags |= 1;
-            if (r.isGaming()) flags |= 2;
+            // ✅ 这里也不再写 gaming flag（可写可不写，因为根本不会出现在列表里）
+            // if (r.isGaming()) flags |= 2;
             p[off++] = (byte) flags;
 
             byte[] nb = r.getName().getBytes(StandardCharsets.UTF_8);
@@ -261,6 +269,7 @@ public class ClientHandler implements Runnable {
         return p;
     }
 
+
     private static void writeIntTo(byte[] b, int off, int v) {
         b[off]     = (byte)((v >>> 24) & 0xFF);
         b[off + 1] = (byte)((v >>> 16) & 0xFF);
@@ -272,9 +281,9 @@ public class ClientHandler implements Runnable {
         running = false;
         try { socket.close(); } catch (IOException ignored) {}
 
-        // 如果断线时还是 host 且房间存在，就移除房间；否则不动
+        // 断线清理：如果断线时还是 host 且房间存在 -> 移除房间
         if (currentRoom != null && isHost) {
-            RoomManager.getInstance().removeRoom(currentRoom.getId());
+            rm.removeRoom(currentRoom.getId());
         }
     }
 }
