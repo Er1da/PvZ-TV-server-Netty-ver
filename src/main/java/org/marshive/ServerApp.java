@@ -1,6 +1,7 @@
 package org.marshive;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.*;
@@ -51,10 +52,16 @@ public class ServerApp {
             System.out.println("[FATAL] Port range overflow: " + basePort + " ~ " + lastPort);
             return;
         }
+        int probeBasePort = basePort + 1000;
+        int lastProbePort = probeBasePort + shardCount - 1;
+        if (probeBasePort <= 0 || lastProbePort > 65535) {
+            System.out.println("[FATAL] Probe port range overflow: " + probeBasePort + " ~ " + lastProbePort);
+            return;
+        }
 
         System.out.println(">>> Game Server Started on Ports: " +
                 basePort + " ~ " + lastPort +
-                " (base=" + basePort + ", shards=" + shardCount + ")");
+                " (base=" + basePort + ", shards=" + shardCount + ", probeBase=" + probeBasePort + ")");
 
         ThreadPoolExecutor pool = new ThreadPoolExecutor(
                 MAX_PLAYERS, MAX_PLAYERS,
@@ -73,14 +80,16 @@ public class ServerApp {
         for (int i = 0; i < shardCount; i++) {
             final int shardId = i;
             final int port = basePort + i;
+            final int probePort = probeBasePort + i;
 
             Thread acceptThread = new Thread(() -> {
                 try (ServerSocket ss = new ServerSocket(port)) {
                     while (true) {
                         Socket s = ss.accept();
                         s.setTcpNoDelay(true);
+                        System.out.println("[ACCEPT@" + port + "] from " + s.getRemoteSocketAddress() + " to " + s.getLocalSocketAddress());
 
-                        ClientHandler h = new ClientHandler(s, rms[shardId], shardId);
+                        ClientHandler h = new ClientHandler(s, rms[shardId], shardId, probePort);
                         try {
                             pool.execute(h);
                         } catch (RejectedExecutionException e) {
@@ -95,6 +104,29 @@ public class ServerApp {
 
             acceptThread.setDaemon(false);
             acceptThread.start();
+
+            Thread probeThread = new Thread(() -> {
+                try (ServerSocket ss = new ServerSocket(probePort)) {
+                    while (true) {
+                        Socket s = ss.accept();
+                        s.setTcpNoDelay(true);
+                        s.setSoTimeout(1000);
+                        System.out.println("[PROBE_ACCEPT@" + probePort + "] from " + s.getRemoteSocketAddress() + " to " + s.getLocalSocketAddress());
+                        try (Socket probeSocket = s) {
+                            InputStream in = probeSocket.getInputStream();
+                            int token = Proto.readIntBE(in);
+                            ClientHandler.acceptP2PProbe(token, probeSocket);
+                        } catch (IOException ignored) {
+                        }
+                    }
+                } catch (IOException e) {
+                    System.out.println("[PROBE@" + probePort + "] crashed: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }, "probe-" + probePort);
+
+            probeThread.setDaemon(false);
+            probeThread.start();
         }
     }
 

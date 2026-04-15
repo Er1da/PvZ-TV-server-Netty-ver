@@ -10,8 +10,10 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 public class ClientHandler implements Runnable {
@@ -34,6 +36,9 @@ public class ClientHandler implements Runnable {
     private final Socket socket;
     private final RoomManager rm;
     private final int shardId;
+    private final int probePort;
+
+    private static final ConcurrentHashMap<Integer, ClientHandler> PROBE_WAITERS = new ConcurrentHashMap<>();
 
     private InputStream in;
     private OutputStream out;
@@ -43,13 +48,17 @@ public class ClientHandler implements Runnable {
     private volatile boolean running = true;
 
     private volatile int natPort = -1;
+    private volatile String observedNatIp = "";
+    private volatile int observedNatPort = -1;
+    private volatile int probeToken = 0;
     private int protocolVersion = NETPLAY_VERSION;
     private String playerName = "";
 
-    public ClientHandler(Socket socket, RoomManager rm, int shardId) {
+    public ClientHandler(Socket socket, RoomManager rm, int shardId, int probePort) {
         this.socket = socket;
         this.rm = rm;
         this.shardId = shardId;
+        this.probePort = probePort;
     }
 
     @Override
@@ -58,6 +67,7 @@ public class ClientHandler implements Runnable {
             socket.setTcpNoDelay(true);
             in = new BufferedInputStream(socket.getInputStream());
             out = new BufferedOutputStream(socket.getOutputStream());
+            System.out.println("[LOBBY_CONN][shard=" + shardId + "] remote=" + socket.getRemoteSocketAddress() + " local=" + socket.getLocalSocketAddress());
 
             socket.setSoTimeout(300);
 
@@ -109,6 +119,7 @@ public class ClientHandler implements Runnable {
                 Proto.readFully(in, nb);
                 String roomName = new String(nb, StandardCharsets.UTF_8);
                 int clientVersion = Proto.readIntBE(in);
+                System.out.println("[CREATE_REQ][shard=" + shardId + "] remote=" + socket.getRemoteSocketAddress() + " nameLen=" + nameLen + " version=" + clientVersion);
 
                 protocolVersion = clientVersion;
                 playerName = roomName;
@@ -135,6 +146,7 @@ public class ClientHandler implements Runnable {
                 byte[] nb = new byte[nameLen];
                 Proto.readFully(in, nb);
                 String guestName = new String(nb, StandardCharsets.UTF_8);
+                System.out.println("[JOIN_REQ][shard=" + shardId + "] remote=" + socket.getRemoteSocketAddress() + " room=" + roomId + " nameLen=" + nameLen + " version=" + clientVersion);
 
                 Room r = rm.getRoom(roomId);
                 if (r == null) { sendJoinResult(false, 0, 0); return; }
@@ -232,9 +244,15 @@ public class ClientHandler implements Runnable {
                 int p = Proto.readU16BE(in);
                 if (p <= 0) { sendError(ERR_BAD_REQ); return; }
                 natPort = p;
+                observedNatIp = "";
+                observedNatPort = -1;
+                unregisterProbeToken();
+                probeToken = registerProbeToken(this);
 
-                byte[] payload = new byte[2];
+                byte[] payload = new byte[8];
                 writeU16To(payload, 0, p);
+                writeU16To(payload, 2, probePort);
+                writeIntTo(payload, 4, probeToken);
                 Proto.sendFrame(out, RespType.P2P_READY.code, payload);
                 break;
             }
@@ -261,6 +279,7 @@ public class ClientHandler implements Runnable {
         ClientHandler guest = room.getGuest();
         if (host == null || guest == null) return false;
         if (host.natPort <= 0 || guest.natPort <= 0) return false;
+        if (host.observedNatPort <= 0 || guest.observedNatPort <= 0) return false;
 
         byte[] toHost = buildP2pInfoPayload(room.getId(), guest);
         byte[] toGuest = buildP2pInfoPayload(room.getId(), host);
@@ -301,6 +320,7 @@ public class ClientHandler implements Runnable {
         }
 
         System.out.println("[GAME_MODE][shard=" + shardId + "][room=" + room.getId() + "] P2P (p2p established)");
+        System.out.println("[P2P_DONE_SEND][shard=" + shardId + "][room=" + room.getId() + "] host=" + host.socket.getRemoteSocketAddress() + " guest=" + guest.socket.getRemoteSocketAddress());
 
         try {
             host.sendToClient(RespType.P2P_DONE.code, null);
@@ -331,7 +351,7 @@ public class ClientHandler implements Runnable {
     }
 
     private byte[] buildP2pInfoPayload(int roomId, ClientHandler peer) {
-        String ip = peer.socket.getInetAddress().getHostAddress();
+        String ip = peer.observedNatIp;
         if (ip == null || ip.isEmpty()) ip = "0.0.0.0";
         byte[] ipBytes = ip.getBytes(StandardCharsets.UTF_8);
         int ipLen = Math.min(255, ipBytes.length);
@@ -346,7 +366,7 @@ public class ClientHandler implements Runnable {
         System.arraycopy(ipBytes, 0, p, off, ipLen);
         off += ipLen;
 
-        writeU16To(p, off, peer.natPort);
+        writeU16To(p, off, peer.observedNatPort);
         off += 2;
 
         int timeoutSec = Math.max(1, P2P_FALLBACK_MS / 1000);
@@ -397,6 +417,34 @@ public class ClientHandler implements Runnable {
         synchronized (this) {
             Proto.sendFrame(this.out, respType, payload);
         }
+    }
+
+    private static int registerProbeToken(ClientHandler handler) {
+        int token;
+        do {
+            token = ThreadLocalRandom.current().nextInt(1, Integer.MAX_VALUE);
+        } while (PROBE_WAITERS.putIfAbsent(token, handler) != null);
+        return token;
+    }
+
+    private void unregisterProbeToken() {
+        int token = probeToken;
+        if (token != 0) {
+            PROBE_WAITERS.remove(token, this);
+            probeToken = 0;
+        }
+    }
+
+    private void updateObservedEndpoint(Socket probeSocket) {
+        observedNatIp = probeSocket.getInetAddress().getHostAddress();
+        observedNatPort = probeSocket.getPort();
+        System.out.println("[P2P_PROBE][shard=" + shardId + "] " + observedNatIp + ":" + observedNatPort + " player=" + playerName);
+    }
+
+    public static void acceptP2PProbe(int token, Socket probeSocket) {
+        ClientHandler handler = PROBE_WAITERS.get(token);
+        if (handler == null) return;
+        handler.updateObservedEndpoint(probeSocket);
     }
 
     private byte[] buildRoomListPayload(RoomManager rm) {
@@ -477,6 +525,8 @@ public class ClientHandler implements Runnable {
     private void cleanupOnDisconnect() {
         running = false;
         try { socket.close(); } catch (IOException ignored) {}
+        unregisterProbeToken();
+        System.out.println("[LOBBY_CLOSE][shard=" + shardId + "] player=" + playerName + " remote=" + socket.getRemoteSocketAddress());
 
         Room room = currentRoom;
         currentRoom = null;
