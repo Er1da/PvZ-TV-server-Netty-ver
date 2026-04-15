@@ -16,9 +16,20 @@ public final class Proto {
         return (b1 << 24) | (b2 << 16) | (b3 << 8) | b4;
     }
 
+    public static int readU16BE(InputStream in) throws IOException {
+        int hi = readU8(in);
+        int lo = readU8(in);
+        return (hi << 8) | lo;
+    }
+
     public static void writeIntBE(OutputStream out, int v) throws IOException {
         out.write((v >>> 24) & 0xFF);
         out.write((v >>> 16) & 0xFF);
+        out.write((v >>> 8) & 0xFF);
+        out.write(v & 0xFF);
+    }
+
+    public static void writeU16BE(OutputStream out, int v) throws IOException {
         out.write((v >>> 8) & 0xFF);
         out.write(v & 0xFF);
     }

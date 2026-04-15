@@ -7,11 +7,15 @@ public enum MsgType {
     CREATE((byte) 0x01),
     QUERY ((byte) 0x02),
     JOIN  ((byte) 0x03),
-    LEAVE ((byte) 0x04), // 仍保留：表示“断开/退出客户端”（会断连接）
+    LEAVE ((byte) 0x04),
     START ((byte) 0x05),
 
-    EXIT_ROOM ((byte) 0x06), // host 退出房间但不断线
-    LEAVE_ROOM((byte) 0x07); // guest 离开房间但不断线
+    EXIT_ROOM ((byte) 0x06),
+    LEAVE_ROOM((byte) 0x07),
+
+    NAT_PORT((byte) 0x08),
+    P2P_OK  ((byte) 0x09),
+    P2P_FAIL((byte) 0x0A);
 
     public final byte code;
 

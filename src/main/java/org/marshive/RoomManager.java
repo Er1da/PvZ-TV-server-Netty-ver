@@ -18,9 +18,9 @@ public class RoomManager {
         this.idGen = new AtomicInteger(base + 1000);
     }
 
-    public Room createRoom(String name, ClientHandler host) {
+    public Room createRoom(String name, ClientHandler host, int protocolVersion) {
         int id = idGen.incrementAndGet();
-        Room r = new Room(id, name, host);
+        Room r = new Room(id, name, host, protocolVersion);
         rooms.put(id, r);
         System.out.println("[shard=" + shardId + "] Room Created: " + id + " [" + name + "]");
         return r;

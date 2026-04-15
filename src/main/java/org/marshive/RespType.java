@@ -7,8 +7,12 @@ public enum RespType {
     GUEST_JOINED ((byte) 0x84),
     RELAY_BEGIN  ((byte) 0x85),
 
-    ROOM_EXITED  ((byte) 0x86), // 退出/离开房间成功确认
-    GUEST_LEFT   ((byte) 0x87), // guest 离开推送给 host
+    ROOM_EXITED  ((byte) 0x86),
+    GUEST_LEFT   ((byte) 0x87),
+
+    P2P_INFO     ((byte) 0x88),
+    P2P_READY    ((byte) 0x89),
+    P2P_DONE     ((byte) 0x8A),
 
     ERROR        ((byte) 0xFF);
 
