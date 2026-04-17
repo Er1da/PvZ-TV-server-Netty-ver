@@ -618,7 +618,15 @@ public class TestClientFrame extends JFrame {
         }
 
         if (type == RespType.RELAY_BEGIN.code) {
-            log("<< RELAY_BEGIN");
+            int relayEpoch = payload.length >= 4 ? bytesToInt(payload, 0) : 0;
+            log("<< RELAY_BEGIN epoch=" + relayEpoch);
+            sendRelayReady(relayEpoch);
+            return;
+        }
+
+        if (type == RespType.RELAY_GO.code) {
+            int relayEpoch = payload.length >= 4 ? bytesToInt(payload, 0) : 0;
+            log("<< RELAY_GO epoch=" + relayEpoch);
             closePendingP2POnly();
             dataMode = DataMode.RELAY;
             autoQueryTimer.stop();
@@ -724,6 +732,19 @@ public class TestClientFrame extends JFrame {
     private void sendP2PFail() {
         closePendingP2POnly();
         sendOne((byte) 0x0A, "P2P_FAIL");
+    }
+
+    private void sendRelayReady(int relayEpoch) {
+        if (relayEpoch == 0) return;
+        try {
+            out.write(0x0B);
+            Proto.writeIntBE(out, relayEpoch);
+            out.flush();
+            log(">> RELAY_READY epoch=" + relayEpoch);
+        } catch (IOException e) {
+            log("Send RELAY_READY failed: " + e.getMessage());
+            disconnect("send error");
+        }
     }
 
     private void closePendingP2POnly() {

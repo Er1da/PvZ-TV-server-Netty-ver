@@ -15,7 +15,8 @@ public enum MsgType {
 
     NAT_PORT((byte) 0x08),
     P2P_OK  ((byte) 0x09),
-    P2P_FAIL((byte) 0x0A);
+    P2P_FAIL((byte) 0x0A),
+    RELAY_READY((byte) 0x0B);
 
     public final byte code;
 

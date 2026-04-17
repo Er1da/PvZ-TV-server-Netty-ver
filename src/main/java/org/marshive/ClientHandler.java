@@ -15,7 +15,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class ClientHandler implements Runnable {
     private static final int NETPLAY_VERSION = 3154;
@@ -25,11 +24,8 @@ public class ClientHandler implements Runnable {
     private static final byte ERR_FULL      = 3;
     private static final byte ERR_NOT_HOST  = 4;
     private static final byte ERR_NOT_READY = 5;
-    private static final AtomicInteger CONN_SEQ = new AtomicInteger(1000);
-    private static final AtomicInteger NEGOTIATION_SEQ = new AtomicInteger(1);
 
-    private final int connId = CONN_SEQ.incrementAndGet();
-    private static final int P2P_FALLBACK_MS = 5000;
+    private static final int P2P_FALLBACK_MS = 3000;
     private static final ScheduledExecutorService P2P_FALLBACK_SCHEDULER =
             Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "p2p-fallback");
@@ -41,6 +37,7 @@ public class ClientHandler implements Runnable {
     private final RoomManager rm;
     private final int shardId;
     private final int probePort;
+    private final int probePort2;
 
     private static final ConcurrentHashMap<Integer, ClientHandler> PROBE_WAITERS = new ConcurrentHashMap<>();
 
@@ -52,102 +49,20 @@ public class ClientHandler implements Runnable {
     private volatile boolean running = true;
 
     private volatile int natPort = -1;
-    private volatile String observedNatIp = "";
-    private volatile int observedNatPort = -1;
+    private volatile String observedNatIp1 = "";
+    private volatile int observedNatPort1 = -1;
+    private volatile String observedNatIp2 = "";
+    private volatile int observedNatPort2 = -1;
     private volatile int probeToken = 0;
     private int protocolVersion = NETPLAY_VERSION;
     private String playerName = "";
 
-    public ClientHandler(Socket socket, RoomManager rm, int shardId, int probePort) {
+    public ClientHandler(Socket socket, RoomManager rm, int shardId, int probePort, int probePort2) {
         this.socket = socket;
         this.rm = rm;
         this.shardId = shardId;
         this.probePort = probePort;
-    }
-
-    private String safePlayer() {
-        return (playerName == null || playerName.isEmpty()) ? "?" : playerName;
-    }
-
-    private static String safePlayer(ClientHandler h) {
-        if (h == null) return "null";
-        return (h.playerName == null || h.playerName.isEmpty()) ? "?" : h.playerName;
-    }
-
-    private int safeRoomId(Room room) {
-        return room == null ? -1 : room.getId();
-    }
-
-    private static String safeAddr(Socket s) {
-        if (s == null) return "null";
-        try {
-            return String.valueOf(s.getRemoteSocketAddress());
-        } catch (Exception e) {
-            return "addr_err";
-        }
-    }
-
-    private String selfRole(Room room) {
-        if (room == null) return "no_room";
-        if (room.getHost() == this) return "host";
-        if (room.getGuest() == this) return "guest";
-        return "outsider";
-    }
-
-    private static String peerState(String role, ClientHandler h) {
-        if (h == null) return role + "{null}";
-        return role + "{"
-                + "conn=" + h.connId
-                + ",name=" + safePlayer(h)
-                + ",natPort=" + h.natPort
-                + ",obs=" + h.observedNatIp + ":" + h.observedNatPort
-                + ",token=" + h.probeToken
-                + ",remote=" + safeAddr(h.socket)
-                + "}";
-    }
-
-    private static String roomState(Room room) {
-        if (room == null) return "room=null";
-        return "room={"
-                + "id=" + room.getId()
-                + ",gaming=" + room.isGaming()
-                + ",full=" + room.isFull()
-                + ",p2pNegotiating=" + room.isP2pNegotiating()
-                + ",p2pEstablished=" + room.isP2pEstablished()
-                + ",relayMode=" + room.isRelayMode()
-                + "}";
-    }
-
-    private void logState(String tag, Room room, String extra) {
-        ClientHandler host = room == null ? null : room.getHost();
-        ClientHandler guest = room == null ? null : room.getGuest();
-
-        System.out.println("[" + tag + "]"
-                + "[shard=" + shardId + "]"
-                + "[conn=" + connId + "]"
-                + "[role=" + selfRole(room) + "]"
-                + "[player=" + safePlayer() + "] "
-                + roomState(room) + " "
-                + peerState("host", host) + " "
-                + peerState("guest", guest)
-                + (extra == null || extra.isEmpty() ? "" : " | " + extra));
-    }
-
-    private static String p2pFailReason(Room room) {
-        if (room == null) return "room_null";
-
-        ClientHandler host = room.getHost();
-        ClientHandler guest = room.getGuest();
-
-        if (host == null) return "host_null";
-        if (guest == null) return "guest_null";
-
-        if (host.natPort <= 0) return "host_natPort_missing";
-        if (guest.natPort <= 0) return "guest_natPort_missing";
-        if (host.observedNatPort <= 0) return "host_observedNatPort_missing";
-        if (guest.observedNatPort <= 0) return "guest_observedNatPort_missing";
-
-        return "unknown";
+        this.probePort2 = probePort2;
     }
 
     @Override
@@ -156,19 +71,11 @@ public class ClientHandler implements Runnable {
             socket.setTcpNoDelay(true);
             in = new BufferedInputStream(socket.getInputStream());
             out = new BufferedOutputStream(socket.getOutputStream());
-            System.out.println("[LOBBY_CONN]"
-                    + "[shard=" + shardId + "]"
-                    + "[conn=" + connId + "]"
-                    + " remote=" + socket.getRemoteSocketAddress()
-                    + " local=" + socket.getLocalSocketAddress());
 
             socket.setSoTimeout(300);
 
             while (running) {
-                if (currentRoom != null
-                        && currentRoom.isGaming()
-                        && currentRoom.isFull()
-                        && currentRoom.isRelayMode()) {
+                if (isRelayDataPhaseReady(currentRoom)) {
                     break;
                 }
 
@@ -189,10 +96,7 @@ public class ClientHandler implements Runnable {
                 handleCommand(type);
             }
 
-            if (currentRoom != null
-                    && currentRoom.isGaming()
-                    && currentRoom.isFull()
-                    && currentRoom.isRelayMode()) {
+            if (isRelayDataPhaseReady(currentRoom)) {
                 socket.setSoTimeout(0);
                 forwardLoop();
             }
@@ -212,15 +116,16 @@ public class ClientHandler implements Runnable {
                 Proto.readFully(in, nb);
                 String roomName = new String(nb, StandardCharsets.UTF_8);
                 int clientVersion = Proto.readIntBE(in);
-                System.out.println("[CREATE_REQ][shard=" + shardId + "] remote=" + socket.getRemoteSocketAddress() + " nameLen=" + nameLen + " version=" + clientVersion);
+
+                if (currentRoom != null) {
+                    sendError(ERR_BAD_REQ);
+                    return;
+                }
 
                 protocolVersion = clientVersion;
                 playerName = roomName;
                 currentRoom = rm.createRoom(roomName, this, clientVersion);
                 isHost = true;
-                logState("CREATE_OK", currentRoom,
-                        "clientVersion=" + clientVersion
-                                + ", roomName=" + roomName);
 
                 byte[] payload = new byte[8];
                 writeIntTo(payload, 0, currentRoom.getId());
@@ -242,7 +147,6 @@ public class ClientHandler implements Runnable {
                 byte[] nb = new byte[nameLen];
                 Proto.readFully(in, nb);
                 String guestName = new String(nb, StandardCharsets.UTF_8);
-                System.out.println("[JOIN_REQ][shard=" + shardId + "] remote=" + socket.getRemoteSocketAddress() + " room=" + roomId + " nameLen=" + nameLen + " version=" + clientVersion);
 
                 Room r = rm.getRoom(roomId);
                 if (r == null) { sendJoinResult(false, 0, 0); return; }
@@ -260,10 +164,6 @@ public class ClientHandler implements Runnable {
                 isHost = false;
                 protocolVersion = clientVersion;
                 playerName = guestName;
-                logState("JOIN_OK", currentRoom,
-                        "joinRoomId=" + roomId
-                                + ", guestName=" + guestName
-                                + ", clientVersion=" + clientVersion);
 
                 sendJoinResult(true, roomId, r.getProtocolVersion(), r.getName());
 
@@ -284,19 +184,20 @@ public class ClientHandler implements Runnable {
                 if (!isHost || currentRoom == null) { sendError(ERR_NOT_HOST); return; }
                 if (!currentRoom.isFull()) { sendError(ERR_NOT_READY); return; }
 
-                logState("START_REQ_BEFORE", currentRoom, null);
-
-                currentRoom.setGaming(true);
-
-                logState("START_REQ_AFTER_SET_GAMING", currentRoom, null);
+                synchronized (currentRoom) {
+                    currentRoom.setGaming(true);
+                    currentRoom.setP2pNegotiating(false);
+                    currentRoom.setP2pEstablished(false);
+                    currentRoom.setRelayMode(false);
+                    currentRoom.setRelayEpoch(0);
+                    currentRoom.setHostRelayReady(false);
+                    currentRoom.setGuestRelayReady(false);
+                    currentRoom.setRelayDataOpen(false);
+                }
 
                 boolean p2pStarted = tryBeginP2PNegotiation(currentRoom);
                 if (!p2pStarted) {
-                    logState("START_REQ_P2P_NOT_STARTED", currentRoom,
-                            "reason=" + p2pFailReason(currentRoom));
-                    beginRelayFallback(currentRoom, "start_immediate_fail");
-                } else {
-                    logState("START_REQ_P2P_STARTED", currentRoom, null);
+                    beginRelayFallback(currentRoom);
                 }
                 break;
             }
@@ -351,44 +252,42 @@ public class ClientHandler implements Runnable {
             case NAT_PORT: {
                 int p = Proto.readU16BE(in);
                 if (p <= 0) { sendError(ERR_BAD_REQ); return; }
-
-                int oldNatPort = natPort;
-                int oldObservedNatPort = observedNatPort;
-                int oldToken = probeToken;
-
                 natPort = p;
-                observedNatIp = "";
-                observedNatPort = -1;
+                observedNatIp1 = "";
+                observedNatPort1 = -1;
+                observedNatIp2 = "";
+                observedNatPort2 = -1;
                 unregisterProbeToken();
                 probeToken = registerProbeToken(this);
 
-                logState("NAT_PORT_SET", currentRoom,
-                        "oldNatPort=" + oldNatPort
-                                + ", newNatPort=" + natPort
-                                + ", oldObservedNatPort=" + oldObservedNatPort
-                                + ", oldToken=" + oldToken
-                                + ", newToken=" + probeToken
-                                + ", replyProbePort=" + probePort);
-
-                byte[] payload = new byte[8];
+                byte[] payload = new byte[10];
                 writeU16To(payload, 0, p);
                 writeU16To(payload, 2, probePort);
-                writeIntTo(payload, 4, probeToken);
+                writeU16To(payload, 4, probePort2);
+                writeIntTo(payload, 6, probeToken);
                 Proto.sendFrame(out, RespType.P2P_READY.code, payload);
                 break;
             }
 
             case P2P_OK: {
                 if (currentRoom == null || !currentRoom.isGaming()) { sendError(ERR_BAD_REQ); return; }
-                logState("P2P_OK_RECV", currentRoom, null);
                 finishP2P(currentRoom);
                 break;
             }
 
             case P2P_FAIL: {
                 if (currentRoom == null || !currentRoom.isGaming()) { sendError(ERR_BAD_REQ); return; }
-                logState("P2P_FAIL_RECV", currentRoom, null);
-                beginRelayFallback(currentRoom, "client_report_fail");
+                beginRelayFallback(currentRoom);
+                break;
+            }
+
+            case RELAY_READY: {
+                int relayEpoch = Proto.readIntBE(in);
+                if (currentRoom == null || !currentRoom.isGaming() || !currentRoom.isRelayMode()) {
+                    sendError(ERR_BAD_REQ);
+                    return;
+                }
+                markRelayReady(currentRoom, relayEpoch);
                 break;
             }
 
@@ -400,21 +299,9 @@ public class ClientHandler implements Runnable {
     private boolean tryBeginP2PNegotiation(Room room) {
         ClientHandler host = room.getHost();
         ClientHandler guest = room.getGuest();
-
-        if (host == null || guest == null) {
-            logState("P2P_BEGIN_BLOCKED", room, "reason=" + p2pFailReason(room));
-            return false;
-        }
-        if (host.natPort <= 0 || guest.natPort <= 0) {
-            logState("P2P_BEGIN_BLOCKED", room, "reason=" + p2pFailReason(room));
-            return false;
-        }
-        if (host.observedNatPort <= 0 || guest.observedNatPort <= 0) {
-            logState("P2P_BEGIN_BLOCKED", room, "reason=" + p2pFailReason(room));
-            return false;
-        }
-
-        final int attemptId = NEGOTIATION_SEQ.getAndIncrement();
+        if (host == null || guest == null) return false;
+        if (host.natPort <= 0 || guest.natPort <= 0) return false;
+        if (!host.hasStableProbe() || !guest.hasStableProbe()) return false;
 
         byte[] toHost = buildP2pInfoPayload(room.getId(), guest);
         byte[] toGuest = buildP2pInfoPayload(room.getId(), host);
@@ -423,13 +310,11 @@ public class ClientHandler implements Runnable {
             room.setP2pNegotiating(true);
             room.setP2pEstablished(false);
             room.setRelayMode(false);
+            room.setRelayEpoch(0);
+            room.setHostRelayReady(false);
+            room.setGuestRelayReady(false);
+            room.setRelayDataOpen(false);
         }
-
-        logState("P2P_BEGIN_READY", room,
-                "attempt=" + attemptId
-                        + ", toHostPeer=" + guest.observedNatIp + ":" + guest.observedNatPort
-                        + ", toGuestPeer=" + host.observedNatIp + ":" + host.observedNatPort
-                        + ", timeoutMs=" + P2P_FALLBACK_MS);
 
         try {
             host.sendToClient(RespType.P2P_INFO.code, toHost);
@@ -438,55 +323,10 @@ public class ClientHandler implements Runnable {
             synchronized (room) {
                 room.setP2pNegotiating(false);
             }
-            logState("P2P_INFO_SEND_FAIL", room,
-                    "attempt=" + attemptId + ", ex=" + e.getMessage());
             return false;
         }
 
-        logState("P2P_INFO_SENT", room, "attempt=" + attemptId);
-
-        P2P_FALLBACK_SCHEDULER.schedule(() -> {
-            ClientHandler h = room.getHost();
-            ClientHandler g = room.getGuest();
-
-            String reason;
-            synchronized (room) {
-                if (room.isRelayMode()) {
-                    reason = "already_relay";
-                } else if (room.isP2pEstablished()) {
-                    reason = "already_p2p";
-                } else {
-                    reason = "timeout_no_p2p_ok";
-                }
-            }
-
-            if (!"timeout_no_p2p_ok".equals(reason)) {
-                if (h != null) {
-                    h.logState("P2P_FALLBACK_TIMER_SKIP", room,
-                            "attempt=" + attemptId + ", reason=" + reason);
-                } else if (g != null) {
-                    g.logState("P2P_FALLBACK_TIMER_SKIP", room,
-                            "attempt=" + attemptId + ", reason=" + reason);
-                } else {
-                    System.out.println("[P2P_FALLBACK_TIMER_SKIP]"
-                            + " attempt=" + attemptId
-                            + " reason=" + reason
-                            + " roomId=" + room.getId());
-                }
-                return;
-            }
-
-            if (h != null) {
-                h.logState("P2P_FALLBACK_TIMER_FIRE", room,
-                        "attempt=" + attemptId + ", reason=" + reason);
-            } else if (g != null) {
-                g.logState("P2P_FALLBACK_TIMER_FIRE", room,
-                        "attempt=" + attemptId + ", reason=" + reason);
-            }
-
-            beginRelayFallback(room, "timeout_attempt_" + attemptId);
-        }, P2P_FALLBACK_MS, TimeUnit.MILLISECONDS);
-
+        P2P_FALLBACK_SCHEDULER.schedule(() -> beginRelayFallback(room), P2P_FALLBACK_MS, TimeUnit.MILLISECONDS);
         return true;
     }
 
@@ -494,73 +334,124 @@ public class ClientHandler implements Runnable {
         ClientHandler host = room.getHost();
         ClientHandler guest = room.getGuest();
         if (host == null || guest == null) {
-            beginRelayFallback(room, "finishP2P_host_or_guest_null");
+            beginRelayFallback(room);
             return;
         }
 
-        logState("P2P_FINISH_ENTER", room, null);
-
         synchronized (room) {
-            if (room.isRelayMode()) {
-                logState("P2P_FINISH_SKIP", room, "reason=already_relay");
-                return;
-            }
-            if (room.isP2pEstablished()) {
-                logState("P2P_FINISH_SKIP", room, "reason=already_p2p");
-                return;
-            }
+            if (room.isRelayMode() || room.isP2pEstablished()) return;
             room.setP2pNegotiating(false);
             room.setP2pEstablished(true);
             room.setRelayMode(false);
+            room.setRelayEpoch(0);
+            room.setHostRelayReady(false);
+            room.setGuestRelayReady(false);
+            room.setRelayDataOpen(false);
         }
 
-        logState("P2P_ESTABLISHED", room, null);
+        System.out.println("[GAME_MODE][shard=" + shardId + "][room=" + room.getId() + "] P2P (p2p established)");
 
         try {
             host.sendToClient(RespType.P2P_DONE.code, null);
             guest.sendToClient(RespType.P2P_DONE.code, null);
-        } catch (IOException e) {
-            beginRelayFallback(room, "send_p2p_done_fail");
+        } catch (IOException ignored) {
+            beginRelayFallback(room);
         }
     }
 
-    private void beginRelayFallback(Room room, String reason) {
+    private void beginRelayFallback(Room room) {
         ClientHandler host = room.getHost();
         ClientHandler guest = room.getGuest();
-        if (host == null || guest == null) {
-            if (host != null) {
-                host.logState("RELAY_ABORT_NO_PEER", room, "reason=" + reason);
-            } else if (guest != null) {
-                guest.logState("RELAY_ABORT_NO_PEER", room, "reason=" + reason);
+        if (host == null || guest == null) return;
+
+        int relayEpoch;
+        synchronized (room) {
+            if (room.isRelayMode() || room.isP2pEstablished()) return;
+            room.setP2pNegotiating(false);
+            room.setRelayMode(true);
+            room.setP2pEstablished(false);
+            room.setHostRelayReady(false);
+            room.setGuestRelayReady(false);
+            room.setRelayDataOpen(false);
+            relayEpoch = ThreadLocalRandom.current().nextInt(1, Integer.MAX_VALUE);
+            room.setRelayEpoch(relayEpoch);
+        }
+
+        System.out.println("[GAME_MODE][shard=" + shardId + "][room=" + room.getId() + "] RELAY (relay fallback)");
+
+        byte[] relayPayload = new byte[4];
+        writeIntTo(relayPayload, 0, relayEpoch);
+        try {
+            host.sendToClient(RespType.RELAY_BEGIN.code, relayPayload);
+            guest.sendToClient(RespType.RELAY_BEGIN.code, relayPayload);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private void markRelayReady(Room room, int relayEpoch) {
+        boolean shouldOpenRelay = false;
+        int openEpoch = relayEpoch;
+        ClientHandler host = null;
+        ClientHandler guest = null;
+
+        synchronized (room) {
+            if (!room.isRelayMode()) return;
+            if (relayEpoch != room.getRelayEpoch()) {
+                System.out.println("[RELAY_READY][shard=" + shardId + "][room=" + room.getId()
+                        + "] stale epoch=" + relayEpoch + " expected=" + room.getRelayEpoch());
+                return;
             }
+            if (isHost) {
+                room.setHostRelayReady(true);
+            } else {
+                room.setGuestRelayReady(true);
+            }
+            System.out.println("[RELAY_READY][shard=" + shardId + "][room=" + room.getId()
+                    + "] hostReady=" + room.isHostRelayReady()
+                    + " guestReady=" + room.isGuestRelayReady()
+                    + " epoch=" + relayEpoch);
+
+            if (room.isHostRelayReady() && room.isGuestRelayReady() && !room.isRelayDataOpen()) {
+                room.setRelayDataOpen(true);
+                shouldOpenRelay = true;
+                openEpoch = room.getRelayEpoch();
+                host = room.getHost();
+                guest = room.getGuest();
+            }
+        }
+
+        if (!shouldOpenRelay || host == null || guest == null) {
             return;
         }
 
-        synchronized (room) {
-            if (room.isRelayMode()) {
-                host.logState("RELAY_SKIP_ALREADY_RELAY", room, "reason=" + reason);
-                return;
-            }
-            if (room.isP2pEstablished()) {
-                host.logState("RELAY_SKIP_ALREADY_P2P", room, "reason=" + reason);
-                return;
-            }
-            room.setP2pNegotiating(false);
-            room.setRelayMode(true);
-        }
-
-        host.logState("RELAY_BEGIN", room, "reason=" + reason);
-
+        byte[] payload = new byte[4];
+        writeIntTo(payload, 0, openEpoch);
         try {
-            host.sendToClient(RespType.RELAY_BEGIN.code, null);
-            guest.sendToClient(RespType.RELAY_BEGIN.code, null);
+            host.sendToClient(RespType.RELAY_GO.code, payload);
+            guest.sendToClient(RespType.RELAY_GO.code, payload);
+            System.out.println("[GAME_MODE][shard=" + shardId + "][room=" + room.getId()
+                    + "] RELAY_GO epoch=" + openEpoch);
         } catch (IOException e) {
-            host.logState("RELAY_SEND_FAIL", room, "reason=" + reason + ", ex=" + e.getMessage());
+            synchronized (room) {
+                room.setRelayDataOpen(false);
+            }
+            System.out.println("[GAME_MODE][shard=" + shardId + "][room=" + room.getId()
+                    + "] RELAY_GO send failed: " + e.getMessage());
+        }
+    }
+
+    private boolean isRelayDataPhaseReady(Room room) {
+        if (room == null) return false;
+        synchronized (room) {
+            return room.isGaming()
+                    && room.isFull()
+                    && room.isRelayMode()
+                    && room.isRelayDataOpen();
         }
     }
 
     private byte[] buildP2pInfoPayload(int roomId, ClientHandler peer) {
-        String ip = peer.observedNatIp;
+        String ip = peer.getStableNatIp();
         if (ip == null || ip.isEmpty()) ip = "0.0.0.0";
         byte[] ipBytes = ip.getBytes(StandardCharsets.UTF_8);
         int ipLen = Math.min(255, ipBytes.length);
@@ -575,7 +466,7 @@ public class ClientHandler implements Runnable {
         System.arraycopy(ipBytes, 0, p, off, ipLen);
         off += ipLen;
 
-        writeU16To(p, off, peer.observedNatPort);
+        writeU16To(p, off, peer.getStableNatPort());
         off += 2;
 
         int timeoutSec = Math.max(1, P2P_FALLBACK_MS / 1000);
@@ -628,6 +519,10 @@ public class ClientHandler implements Runnable {
         }
     }
 
+    public boolean isProbeReady() {
+        return natPort > 0 && hasStableProbe();
+    }
+
     private static int registerProbeToken(ClientHandler handler) {
         int token;
         do {
@@ -644,39 +539,38 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    private void updateObservedEndpoint(Socket probeSocket) {
-        String oldIp = observedNatIp;
-        int oldPort = observedNatPort;
-
-        observedNatIp = probeSocket.getInetAddress().getHostAddress();
-        observedNatPort = probeSocket.getPort();
-
-        logState("P2P_PROBE_HIT", currentRoom,
-                "oldObserved=" + oldIp + ":" + oldPort
-                        + ", newObserved=" + observedNatIp + ":" + observedNatPort
-                        + ", probeRemote=" + probeSocket.getRemoteSocketAddress()
-                        + ", probeLocal=" + probeSocket.getLocalSocketAddress());
+    private synchronized void updateObservedEndpoint(Socket probeSocket, int probeIndex) {
+        String ip = probeSocket.getInetAddress().getHostAddress();
+        int port = probeSocket.getPort();
+        if (probeIndex == 2) {
+            observedNatIp2 = ip;
+            observedNatPort2 = port;
+        } else {
+            observedNatIp1 = ip;
+            observedNatPort1 = port;
+        }
+        System.out.println("[P2P_PROBE][shard=" + shardId + "][idx=" + probeIndex + "] " + ip + ":" + port + " player=" + playerName);
     }
 
-    public static void acceptP2PProbe(int token, Socket probeSocket) {
+    public static void acceptP2PProbe(int token, Socket probeSocket, int probeIndex) {
         ClientHandler handler = PROBE_WAITERS.get(token);
-        if (handler == null) {
-            System.out.println("[P2P_PROBE_MISS]"
-                    + " token=" + token
-                    + " remote=" + probeSocket.getRemoteSocketAddress()
-                    + " local=" + probeSocket.getLocalSocketAddress());
-            return;
-        }
+        if (handler == null) return;
+        handler.updateObservedEndpoint(probeSocket, probeIndex);
+    }
 
-        System.out.println("[P2P_PROBE_DISPATCH]"
-                + "[shard=" + handler.shardId + "]"
-                + "[conn=" + handler.connId + "]"
-                + "[player=" + safePlayer(handler) + "]"
-                + " token=" + token
-                + " remote=" + probeSocket.getRemoteSocketAddress()
-                + " local=" + probeSocket.getLocalSocketAddress());
+    private synchronized boolean hasStableProbe() {
+        if (observedNatPort1 <= 0 || observedNatPort2 <= 0) return false;
+        if (observedNatIp1 == null || observedNatIp2 == null) return false;
+        if (observedNatIp1.isEmpty() || observedNatIp2.isEmpty()) return false;
+        return observedNatPort1 == observedNatPort2 && observedNatIp1.equals(observedNatIp2);
+    }
 
-        handler.updateObservedEndpoint(probeSocket);
+    private synchronized String getStableNatIp() {
+        return hasStableProbe() ? observedNatIp1 : "";
+    }
+
+    private synchronized int getStableNatPort() {
+        return hasStableProbe() ? observedNatPort1 : -1;
     }
 
     private byte[] buildRoomListPayload(RoomManager rm) {
@@ -704,6 +598,11 @@ public class ClientHandler implements Runnable {
 
             int flags = 0;
             if (r.isFull()) flags |= 1;
+            if (r.isGaming()) flags |= 2;
+            ClientHandler host = r.getHost();
+            ClientHandler guest = r.getGuest();
+            if (host != null && host.isProbeReady()) flags |= 4;
+            if (guest != null && guest.isProbeReady()) flags |= 8;
             p[off++] = (byte) flags;
 
             writeIntTo(p, off, r.getProtocolVersion()); off += 4;
@@ -758,7 +657,6 @@ public class ClientHandler implements Runnable {
         running = false;
         try { socket.close(); } catch (IOException ignored) {}
         unregisterProbeToken();
-        System.out.println("[LOBBY_CLOSE][shard=" + shardId + "] player=" + playerName + " remote=" + socket.getRemoteSocketAddress());
 
         Room room = currentRoom;
         currentRoom = null;

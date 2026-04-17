@@ -58,10 +58,16 @@ public class ServerApp {
             System.out.println("[FATAL] Probe port range overflow: " + probeBasePort + " ~ " + lastProbePort);
             return;
         }
+        int probeBasePort2 = probeBasePort + shardCount;
+        int lastProbePort2 = probeBasePort2 + shardCount - 1;
+        if (probeBasePort2 <= 0 || lastProbePort2 > 65535) {
+            System.out.println("[FATAL] Probe2 port range overflow: " + probeBasePort2 + " ~ " + lastProbePort2);
+            return;
+        }
 
         System.out.println(">>> Game Server Started on Ports: " +
                 basePort + " ~ " + lastPort +
-                " (base=" + basePort + ", shards=" + shardCount + ", probeBase=" + probeBasePort + ")");
+                " (base=" + basePort + ", shards=" + shardCount + ", probeBase1=" + probeBasePort + ", probeBase2=" + probeBasePort2 + ")");
 
         ThreadPoolExecutor pool = new ThreadPoolExecutor(
                 MAX_PLAYERS, MAX_PLAYERS,
@@ -81,15 +87,15 @@ public class ServerApp {
             final int shardId = i;
             final int port = basePort + i;
             final int probePort = probeBasePort + i;
+            final int probePort2 = probeBasePort2 + i;
 
             Thread acceptThread = new Thread(() -> {
                 try (ServerSocket ss = new ServerSocket(port)) {
                     while (true) {
                         Socket s = ss.accept();
                         s.setTcpNoDelay(true);
-                        System.out.println("[ACCEPT@" + port + "] from " + s.getRemoteSocketAddress() + " to " + s.getLocalSocketAddress());
 
-                        ClientHandler h = new ClientHandler(s, rms[shardId], shardId, probePort);
+                        ClientHandler h = new ClientHandler(s, rms[shardId], shardId, probePort, probePort2);
                         try {
                             pool.execute(h);
                         } catch (RejectedExecutionException e) {
@@ -111,11 +117,10 @@ public class ServerApp {
                         Socket s = ss.accept();
                         s.setTcpNoDelay(true);
                         s.setSoTimeout(1000);
-                        System.out.println("[PROBE_ACCEPT@" + probePort + "] from " + s.getRemoteSocketAddress() + " to " + s.getLocalSocketAddress());
                         try (Socket probeSocket = s) {
                             InputStream in = probeSocket.getInputStream();
                             int token = Proto.readIntBE(in);
-                            ClientHandler.acceptP2PProbe(token, probeSocket);
+                            ClientHandler.acceptP2PProbe(token, probeSocket, 1);
                         } catch (IOException ignored) {
                         }
                     }
@@ -127,6 +132,28 @@ public class ServerApp {
 
             probeThread.setDaemon(false);
             probeThread.start();
+
+            Thread probeThread2 = new Thread(() -> {
+                try (ServerSocket ss = new ServerSocket(probePort2)) {
+                    while (true) {
+                        Socket s = ss.accept();
+                        s.setTcpNoDelay(true);
+                        s.setSoTimeout(1000);
+                        try (Socket probeSocket = s) {
+                            InputStream in = probeSocket.getInputStream();
+                            int token = Proto.readIntBE(in);
+                            ClientHandler.acceptP2PProbe(token, probeSocket, 2);
+                        } catch (IOException ignored) {
+                        }
+                    }
+                } catch (IOException e) {
+                    System.out.println("[PROBE2@" + probePort2 + "] crashed: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }, "probe2-" + probePort2);
+
+            probeThread2.setDaemon(false);
+            probeThread2.start();
         }
     }
 

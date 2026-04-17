@@ -10,6 +10,10 @@ public class Room {
     private volatile boolean p2pNegotiating = false;
     private volatile boolean p2pEstablished = false;
     private volatile boolean relayMode = false;
+    private volatile int relayEpoch = 0;
+    private volatile boolean hostRelayReady = false;
+    private volatile boolean guestRelayReady = false;
+    private volatile boolean relayDataOpen = false;
 
     public Room(int id, String name, ClientHandler host, int protocolVersion) {
         this.id = id;
@@ -38,4 +42,16 @@ public class Room {
 
     public boolean isRelayMode() { return relayMode; }
     public void setRelayMode(boolean v) { this.relayMode = v; }
+
+    public int getRelayEpoch() { return relayEpoch; }
+    public void setRelayEpoch(int relayEpoch) { this.relayEpoch = relayEpoch; }
+
+    public boolean isHostRelayReady() { return hostRelayReady; }
+    public void setHostRelayReady(boolean hostRelayReady) { this.hostRelayReady = hostRelayReady; }
+
+    public boolean isGuestRelayReady() { return guestRelayReady; }
+    public void setGuestRelayReady(boolean guestRelayReady) { this.guestRelayReady = guestRelayReady; }
+
+    public boolean isRelayDataOpen() { return relayDataOpen; }
+    public void setRelayDataOpen(boolean relayDataOpen) { this.relayDataOpen = relayDataOpen; }
 }

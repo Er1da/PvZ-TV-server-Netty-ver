@@ -13,6 +13,7 @@ public enum RespType {
     P2P_INFO     ((byte) 0x88),
     P2P_READY    ((byte) 0x89),
     P2P_DONE     ((byte) 0x8A),
+    RELAY_GO     ((byte) 0x8B),
 
     ERROR        ((byte) 0xFF);
 
