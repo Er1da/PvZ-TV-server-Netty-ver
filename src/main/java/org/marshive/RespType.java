@@ -14,6 +14,7 @@ public enum RespType {
     P2P_READY    ((byte) 0x89),
     P2P_DONE     ((byte) 0x8A),
     RELAY_GO     ((byte) 0x8B),
+    ROOM_PROBE_STATE((byte) 0x8C),
 
     ERROR        ((byte) 0xFF);
 

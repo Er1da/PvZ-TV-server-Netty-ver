@@ -177,6 +177,7 @@ public class ClientHandler implements Runnable {
                     System.arraycopy(guestNameBytes, 0, p, 5, guestNameLen);
                     host.sendToClient(RespType.GUEST_JOINED.code, p);
                 }
+                sendRoomProbeState(currentRoom);
                 break;
             }
 
@@ -241,11 +242,31 @@ public class ClientHandler implements Runnable {
                     writeIntTo(p, 0, roomId);
                     host.sendToClient(RespType.GUEST_LEFT.code, p);
                 }
+                sendRoomProbeState(r);
 
                 currentRoom = null;
                 isHost = false;
 
                 Proto.sendFrame(out, RespType.ROOM_EXITED.code, null);
+                break;
+            }
+
+            case KICK_GUEST: {
+                if (!isHost || currentRoom == null) { sendError(ERR_NOT_HOST); return; }
+                if (currentRoom.isGaming()) { sendError(ERR_NOT_READY); return; }
+
+                ClientHandler guest = currentRoom.getGuest();
+                if (guest == null) { sendError(ERR_NOT_FOUND); return; }
+
+                try {
+                    guest.sendToClient(RespType.ROOM_EXITED.code, null);
+                } catch (IOException ignored) {
+                }
+                guest.currentRoom = null;
+                guest.isHost = false;
+                currentRoom.setGuest(null);
+                notifyHostGuestLeft(currentRoom);
+                sendRoomProbeState(currentRoom);
                 break;
             }
 
@@ -266,6 +287,7 @@ public class ClientHandler implements Runnable {
                 writeU16To(payload, 4, probePort2);
                 writeIntTo(payload, 6, probeToken);
                 Proto.sendFrame(out, RespType.P2P_READY.code, payload);
+                sendRoomProbeState(currentRoom);
                 break;
             }
 
@@ -550,6 +572,7 @@ public class ClientHandler implements Runnable {
             observedNatPort1 = port;
         }
         System.out.println("[P2P_PROBE][shard=" + shardId + "][idx=" + probeIndex + "] " + ip + ":" + port + " player=" + playerName);
+        sendRoomProbeState(currentRoom);
     }
 
     public static void acceptP2PProbe(int token, Socket probeSocket, int probeIndex) {
@@ -571,6 +594,41 @@ public class ClientHandler implements Runnable {
 
     private synchronized int getStableNatPort() {
         return hasStableProbe() ? observedNatPort1 : -1;
+    }
+
+    private void sendRoomProbeState(Room room) {
+        if (room == null) return;
+
+        ClientHandler host;
+        ClientHandler guest;
+        int roomId;
+        boolean hostReady;
+        boolean guestReady;
+        synchronized (room) {
+            host = room.getHost();
+            guest = room.getGuest();
+            roomId = room.getId();
+            hostReady = host != null && host.isProbeReady();
+            guestReady = guest != null && guest.isProbeReady();
+        }
+
+        byte[] payload = new byte[6];
+        writeIntTo(payload, 0, roomId);
+        payload[4] = (byte) (hostReady ? 1 : 0);
+        payload[5] = (byte) (guestReady ? 1 : 0);
+
+        if (host != null) {
+            try {
+                host.sendToClient(RespType.ROOM_PROBE_STATE.code, payload);
+            } catch (IOException ignored) {
+            }
+        }
+        if (guest != null && guest != host) {
+            try {
+                guest.sendToClient(RespType.ROOM_PROBE_STATE.code, payload);
+            } catch (IOException ignored) {
+            }
+        }
     }
 
     private byte[] buildRoomListPayload(RoomManager rm) {
@@ -671,6 +729,7 @@ public class ClientHandler implements Runnable {
         } else if (!room.isGaming() && room.getGuest() == this) {
             room.setGuest(null);
             notifyHostGuestLeft(room);
+            sendRoomProbeState(room);
         }
 
         isHost = false;
