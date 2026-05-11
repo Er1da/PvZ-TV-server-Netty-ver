@@ -2,23 +2,28 @@ package org.marshive;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.concurrent.*;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 public class ServerApp {
-
     private static final int DEFAULT_BASE_PORT = 8888;
-    private static final int DEFAULT_SHARD_COUNT = 4;     // ✅ N：开多少个端口
-    private static final int MAX_PLAYERS = 500 * 2;
+    private static final int DEFAULT_SHARD_COUNT = 4;
+    private static final long STALE_ROOM_TTL_MS = 20L * 60L * 1000L;
+    private static final long ROOM_CLEAN_INTERVAL_MS = 60_000L;
 
-    public static void main(String[] args) {
-
-        // ✅ 从 args 读取（支持位置参数或 --base= / --shards=）
+    public static void main(String[] args) throws Exception {
         int basePort = DEFAULT_BASE_PORT;
         int shardCount = DEFAULT_SHARD_COUNT;
 
-        // 1) 先尝试解析 --base=xxxx --shards=yyyy
         for (String a : args) {
             if (a == null) continue;
             a = a.trim();
@@ -28,9 +33,6 @@ public class ServerApp {
                 shardCount = parseIntSafe(a.substring("--shards=".length()), shardCount);
             }
         }
-
-        // 2) 再尝试解析位置参数：args[0]=basePort args[1]=shardCount（如果存在）
-        //    注意：如果用户同时用了 --base=，位置参数会覆盖它（你也可以反过来）
         if (args.length >= 1 && args[0] != null && !args[0].trim().startsWith("--")) {
             basePort = parseIntSafe(args[0].trim(), basePort);
         }
@@ -38,7 +40,6 @@ public class ServerApp {
             shardCount = parseIntSafe(args[1].trim(), shardCount);
         }
 
-        // ✅ 合法性校验
         if (shardCount <= 0) {
             System.out.println("[FATAL] SHARD_COUNT must be > 0, got: " + shardCount);
             return;
@@ -65,96 +66,114 @@ public class ServerApp {
             return;
         }
 
-        System.out.println(">>> Game Server Started on Ports: " +
+        System.out.println(">>> NIO Game Server Started on Ports: " +
                 basePort + " ~ " + lastPort +
                 " (base=" + basePort + ", shards=" + shardCount + ", probeBase1=" + probeBasePort + ", probeBase2=" + probeBasePort2 + ")");
 
-        ThreadPoolExecutor pool = new ThreadPoolExecutor(
-                MAX_PLAYERS, MAX_PLAYERS,
-                0L, TimeUnit.MILLISECONDS,
-                new SynchronousQueue<>(),
-                Executors.defaultThreadFactory(),
-                new ThreadPoolExecutor.AbortPolicy()
-        );
-
-        // ✅ 每个端口一套 RoomManager（房间表隔离）
-        final RoomManager[] rms = new RoomManager[shardCount];
-        for (int i = 0; i < shardCount; i++) {
-            rms[i] = new RoomManager(i); // shardId = i
-        }
+        Selector selector = Selector.open();
+        RoomManager[] rms = new RoomManager[shardCount];
+        Map<ServerSocketChannel, ShardBinding> listeners = new HashMap<>();
 
         for (int i = 0; i < shardCount; i++) {
-            final int shardId = i;
-            final int port = basePort + i;
-            final int probePort = probeBasePort + i;
-            final int probePort2 = probeBasePort2 + i;
+            rms[i] = new RoomManager(i);
+            int port = basePort + i;
+            int probePort = probeBasePort + i;
+            int probePort2 = probeBasePort2 + i;
 
-            Thread acceptThread = new Thread(() -> {
-                try (ServerSocket ss = new ServerSocket(port)) {
-                    while (true) {
-                        Socket s = ss.accept();
-                        s.setTcpNoDelay(true);
+            ServerSocketChannel ssc = ServerSocketChannel.open();
+            ssc.configureBlocking(false);
+            ssc.bind(new InetSocketAddress(port));
+            ssc.register(selector, SelectionKey.OP_ACCEPT);
+            listeners.put(ssc, new ShardBinding(i, probePort, probePort2));
 
-                        ClientHandler h = new ClientHandler(s, rms[shardId], shardId, probePort, probePort2);
-                        try {
-                            pool.execute(h);
-                        } catch (RejectedExecutionException e) {
-                            try { s.close(); } catch (IOException ignored) {}
-                        }
-                    }
-                } catch (IOException e) {
-                    System.out.println("[ACCEPT@" + port + "] crashed: " + e.getMessage());
-                    e.printStackTrace();
-                }
-            }, "accept-" + port);
-
-            acceptThread.setDaemon(false);
-            acceptThread.start();
-
-            Thread probeThread = new Thread(() -> {
-                try (ServerSocket ss = new ServerSocket(probePort)) {
-                    while (true) {
-                        Socket s = ss.accept();
-                        s.setTcpNoDelay(true);
-                        s.setSoTimeout(1000);
-                        try (Socket probeSocket = s) {
-                            InputStream in = probeSocket.getInputStream();
-                            int token = Proto.readIntBE(in);
-                            ClientHandler.acceptP2PProbe(token, probeSocket, 1);
-                        } catch (IOException ignored) {
-                        }
-                    }
-                } catch (IOException e) {
-                    System.out.println("[PROBE@" + probePort + "] crashed: " + e.getMessage());
-                    e.printStackTrace();
-                }
-            }, "probe-" + probePort);
-
-            probeThread.setDaemon(false);
-            probeThread.start();
-
-            Thread probeThread2 = new Thread(() -> {
-                try (ServerSocket ss = new ServerSocket(probePort2)) {
-                    while (true) {
-                        Socket s = ss.accept();
-                        s.setTcpNoDelay(true);
-                        s.setSoTimeout(1000);
-                        try (Socket probeSocket = s) {
-                            InputStream in = probeSocket.getInputStream();
-                            int token = Proto.readIntBE(in);
-                            ClientHandler.acceptP2PProbe(token, probeSocket, 2);
-                        } catch (IOException ignored) {
-                        }
-                    }
-                } catch (IOException e) {
-                    System.out.println("[PROBE2@" + probePort2 + "] crashed: " + e.getMessage());
-                    e.printStackTrace();
-                }
-            }, "probe2-" + probePort2);
-
-            probeThread2.setDaemon(false);
-            probeThread2.start();
+            startProbeThread(probePort, 1);
+            startProbeThread(probePort2, 2);
         }
+
+        long lastRoomCleanAt = System.currentTimeMillis();
+
+        while (true) {
+            selector.select(500);
+            long now = System.currentTimeMillis();
+
+            Iterator<SelectionKey> it = selector.selectedKeys().iterator();
+            while (it.hasNext()) {
+                SelectionKey key = it.next();
+                it.remove();
+                if (!key.isValid()) continue;
+                try {
+                    if (key.isAcceptable()) {
+                        ServerSocketChannel ssc = (ServerSocketChannel) key.channel();
+                        ShardBinding binding = listeners.get(ssc);
+                        if (binding == null) continue;
+                        SocketChannel ch = ssc.accept();
+                        if (ch == null) continue;
+                        ClientHandler h = new ClientHandler(ch, rms[binding.shardId], binding.shardId, binding.probePort, binding.probePort2);
+                        SelectionKey clientKey = ch.register(selector, SelectionKey.OP_READ);
+                        h.key = clientKey;
+                        clientKey.attach(h);
+                    } else {
+                        ClientHandler h = (ClientHandler) key.attachment();
+                        if (h == null) continue;
+                        if (key.isReadable()) h.onReadable();
+                        if (key.isValid() && key.isWritable()) h.onWritable();
+                    }
+                } catch (IOException e) {
+                    Object att = key.attachment();
+                    if (att instanceof ClientHandler) {
+                        ((ClientHandler) att).close();
+                    } else {
+                        key.cancel();
+                    }
+                }
+            }
+
+            for (SelectionKey key : selector.keys()) {
+                Object att = key.attachment();
+                if (!(att instanceof ClientHandler)) continue;
+                ClientHandler h = (ClientHandler) att;
+                if (h.isClosed()) continue;
+                try {
+                    h.onTick(now);
+                } catch (IOException e) {
+                    h.close();
+                }
+            }
+
+            if (now - lastRoomCleanAt >= ROOM_CLEAN_INTERVAL_MS) {
+                int removedTotal = 0;
+                for (RoomManager rm : rms) {
+                    removedTotal += rm.removeStaleNotGamingRooms(now, STALE_ROOM_TTL_MS);
+                }
+                if (removedTotal > 0) {
+                    System.out.println("[ROOM_CLEAN] removed stale rooms: " + removedTotal);
+                }
+                lastRoomCleanAt = now;
+            }
+        }
+    }
+
+    private static void startProbeThread(int probePort, int probeIndex) {
+        Thread t = new Thread(() -> {
+            try (ServerSocket ss = new ServerSocket(probePort)) {
+                while (true) {
+                    Socket s = ss.accept();
+                    s.setTcpNoDelay(true);
+                    s.setSoTimeout(1000);
+                    try (Socket probeSocket = s) {
+                        InputStream in = probeSocket.getInputStream();
+                        int token = Proto.readIntBE(in);
+                        ClientHandler.acceptP2PProbe(token, probeSocket, probeIndex);
+                    } catch (IOException ignored) {
+                    }
+                }
+            } catch (IOException e) {
+                System.out.println("[PROBE" + probeIndex + "@" + probePort + "] crashed: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }, (probeIndex == 1 ? "probe-" : "probe2-") + probePort);
+        t.setDaemon(false);
+        t.start();
     }
 
     private static int parseIntSafe(String s, int fallback) {
@@ -162,6 +181,18 @@ public class ServerApp {
             return Integer.parseInt(s);
         } catch (Exception ignored) {
             return fallback;
+        }
+    }
+
+    private static final class ShardBinding {
+        final int shardId;
+        final int probePort;
+        final int probePort2;
+
+        private ShardBinding(int shardId, int probePort, int probePort2) {
+            this.shardId = shardId;
+            this.probePort = probePort;
+            this.probePort2 = probePort2;
         }
     }
 }

@@ -1,13 +1,21 @@
 package org.marshive;
 
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 
 public class RoomManager {
     private final Map<Integer, Room> rooms = new ConcurrentHashMap<>();
     private final AtomicInteger idGen;
     private final int shardId;
+    private static final DateTimeFormatter TS_FMT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
+                    .withZone(ZoneId.systemDefault());
 
     public RoomManager(int shardId) {
         this.shardId = shardId;
@@ -22,7 +30,8 @@ public class RoomManager {
         int id = idGen.incrementAndGet();
         Room r = new Room(id, name, host, protocolVersion);
         rooms.put(id, r);
-        System.out.println("[shard=" + shardId + "] Room Created: " + id + " [" + name + "]");
+        String createdAt = TS_FMT.format(Instant.ofEpochMilli(r.getCreatedAtMillis()));
+        System.out.println("[shard=" + shardId + "] Room Created: " + id + " [" + name + "] createdAt=" + createdAt);
         return r;
     }
 
@@ -52,4 +61,30 @@ public class RoomManager {
     }
 
     public Iterable<Room> allRooms() { return rooms.values(); }
+
+    public int removeStaleNotGamingRooms(long nowMillis, long ttlMillis) {
+        List<Integer> toRemove = new ArrayList<>();
+        for (Map.Entry<Integer, Room> e : rooms.entrySet()) {
+            Room r = e.getValue();
+            if (r == null) continue;
+            if (r.isGaming()) continue;
+            if (nowMillis - r.getCreatedAtMillis() >= ttlMillis) {
+                toRemove.add(e.getKey());
+            }
+        }
+        for (Integer roomId : toRemove) {
+            Room r = rooms.get(roomId);
+            if (r != null) {
+                ClientHandler host = r.getHost();
+                ClientHandler guest = r.getGuest();
+                if (host != null) host.onRoomRemovedByServer();
+                if (guest != null && guest != host) guest.onRoomRemovedByServer();
+                for (ClientHandler s : r.snapshotSpectators()) {
+                    if (s != null) s.onRoomRemovedByServer();
+                }
+            }
+            removeRoom(roomId);
+        }
+        return toRemove.size();
+    }
 }

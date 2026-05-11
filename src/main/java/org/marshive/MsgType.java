@@ -17,7 +17,10 @@ public enum MsgType {
     P2P_OK  ((byte) 0x09),
     P2P_FAIL((byte) 0x0A),
     RELAY_READY((byte) 0x0B),
-    KICK_GUEST((byte) 0x0C);
+    KICK_GUEST((byte) 0x0C),
+    ASK_START((byte) 0x0D),
+    SET_SPECTATE((byte) 0x0E),
+    JOIN_SPECTATE((byte) 0x0F);
 
     public final byte code;
 
